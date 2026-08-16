@@ -110,7 +110,11 @@ Moon landing and return is roughly 4 800 m/s.
 
 Attitude control is deliberately gamey: reaction wheels produce a torque
 proportional to the craft's moment of inertia, so a big rocket turns at a
-similar rate to a small one. Everything else — thrust, Isp, mass flow, drag,
+similar rate to a small one — roughly 45° in under 3 s, even against max
+dynamic pressure during the gravity turn. The aerodynamic *forces* are
+unscaled, so ascent losses stay honest; only the weathervaning moment is
+softened, which is what keeps the craft steerable while fins still point the
+nose forward on their own. Everything else — thrust, Isp, mass flow, drag,
 gravity — is the real equations.
 
 ---

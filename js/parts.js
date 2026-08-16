@@ -87,6 +87,32 @@
     ctx.beginPath(); ctx.rect(-w / 2, -h / 2, w, h); ink(ctx, w);
   }
 
+  /** tank that narrows toward the top so a smaller stack sits flush on it */
+  function drawTaperTank(ctx, st, d) {
+    const w = d.w, h = d.h, tw = d.topW;
+    ctx.beginPath();
+    ctx.moveTo(-w / 2, -h / 2);
+    ctx.lineTo(-tw / 2, h / 2);
+    ctx.lineTo(tw / 2, h / 2);
+    ctx.lineTo(w / 2, -h / 2);
+    ctx.closePath();
+    ctx.fillStyle = cyl(ctx, w, SHELL_L, SHELL_M, SHELL_D);
+    ctx.fill();
+    ink(ctx, w);
+    // seams follow the taper
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(-w / 2, -h / 2); ctx.lineTo(-tw / 2, h / 2);
+    ctx.lineTo(tw / 2, h / 2); ctx.lineTo(w / 2, -h / 2);
+    ctx.closePath(); ctx.clip();
+    ctx.fillStyle = 'rgba(90,100,116,.28)';
+    for (let y = -h / 2 + 1.6; y < h / 2 - 0.2; y += 1.6) ctx.fillRect(-w / 2, y - 0.03, w, 0.06);
+    ctx.restore();
+    gauge(ctx, tw, h, st ? st.fuel : 1, '#c9541f', '#ffb457');
+    band(ctx, w, -h / 2 + 0.11, 0.22);
+    band(ctx, tw, h / 2 - 0.11, 0.22);
+  }
+
   function drawEngine(ctx, st, d) {
     const w = d.w, h = d.h;
     const topW = w * 0.62, botW = w * 0.99, throatY = h / 2 - h * 0.34;
@@ -375,19 +401,19 @@
 
   add({
     id: 'pod_s', name: 'Pod Mk1', cat: 'Command', type: 'pod',
-    w: 1.0, h: 1.3, mass: 190, cd: 0.9, authority: 0.55,
+    w: 1.0, h: 1.3, mass: 190, cd: 0.9, authority: 2.40,
     desc: 'One-seat capsule. Steering wheels + heat shield.',
     draw: drawPod
   });
   add({
     id: 'pod_m', name: 'Pod Mk2', cat: 'Command', type: 'pod',
-    w: 2.0, h: 2.0, mass: 640, cd: 0.9, authority: 0.62,
+    w: 2.0, h: 2.0, mass: 640, cd: 0.9, authority: 2.60,
     desc: 'Roomy capsule with stronger attitude control.',
     draw: drawPod
   });
   add({
     id: 'probe', name: 'Probe Core', cat: 'Command', type: 'pod',
-    w: 1.0, h: 0.6, mass: 55, cd: 0.9, authority: 0.34,
+    w: 1.0, h: 0.6, mass: 55, cd: 0.9, authority: 1.60,
     desc: 'Unmanned brain. Light, but weaker control.',
     draw: drawProbe
   });
@@ -401,40 +427,64 @@
   add({ id: 'tank_l1', name: 'Tank L', cat: 'Tanks', type: 'tank', w: 4, h: 6, mass: 1500, fuel: 22000, draw: drawTank, desc: 'Large core tank.' });
   add({ id: 'tank_l2', name: 'Tank L Long', cat: 'Tanks', type: 'tank', w: 4, h: 10, mass: 2500, fuel: 38000, draw: drawTank, desc: 'Large tank, double length.' });
 
+  /* Tapered tanks — narrow at the top so the next size down (or a pod) sits
+     flush without spending a part on a separate adapter. They hold less than
+     a straight tank of the same height because the cone has less volume. */
+  add({
+    id: 'tank_ms', name: 'Tank M→S', cat: 'Tanks', type: 'tank',
+    w: 2, topW: 1, h: 3, mass: 270, fuel: 2100, draw: drawTaperTank,
+    desc: 'Medium tank tapering to small. A Mk1 pod sits flush on top.'
+  });
+  add({
+    id: 'tank_ms2', name: 'Tank M→S Long', cat: 'Tanks', type: 'tank',
+    w: 2, topW: 1, h: 5, mass: 420, fuel: 3600, draw: drawTaperTank,
+    desc: 'Longer medium-to-small taper.'
+  });
+  add({
+    id: 'tank_lm', name: 'Tank L→M', cat: 'Tanks', type: 'tank',
+    w: 4, topW: 2, h: 4, mass: 620, fuel: 8500, draw: drawTaperTank,
+    desc: 'Large tank tapering to medium. Saves an adapter on a big stack.'
+  });
+  add({
+    id: 'tank_lm2', name: 'Tank L→M Long', cat: 'Tanks', type: 'tank',
+    w: 4, topW: 2, h: 7, mass: 1080, fuel: 15000, draw: drawTaperTank,
+    desc: 'Longer large-to-medium taper.'
+  });
+
   /* ═══════════════════ ENGINES ═══════════════════ */
 
   add({
     id: 'eng_s', name: 'Sparrow', cat: 'Engines', type: 'engine',
     w: 1, h: 1.3, mass: 120, cd: 0.9,
-    engine: { thrust: 30e3, ispVac: 300, ispSl: 250, gimbal: 0.10 },
+    engine: { thrust: 30e3, ispVac: 300, ispSl: 250, gimbal: 0.15 },
     desc: 'Small engine. Great for upper stages and landers.',
     draw: drawEngine
   });
   add({
     id: 'eng_m', name: 'Hawk', cat: 'Engines', type: 'engine',
     w: 2, h: 2.2, mass: 560, cd: 0.9,
-    engine: { thrust: 200e3, ispVac: 315, ispSl: 270, gimbal: 0.09 },
+    engine: { thrust: 200e3, ispVac: 315, ispSl: 270, gimbal: 0.14 },
     desc: 'Reliable medium workhorse.',
     draw: drawEngine
   });
   add({
     id: 'eng_l', name: 'Titan', cat: 'Engines', type: 'engine',
     w: 4, h: 3.2, mass: 2000, cd: 0.9,
-    engine: { thrust: 950e3, ispVac: 320, ispSl: 285, gimbal: 0.07 },
+    engine: { thrust: 950e3, ispVac: 320, ispSl: 285, gimbal: 0.12 },
     desc: 'Heavy lifter for the big stuff.',
     draw: drawEngine
   });
   add({
     id: 'eng_vac', name: 'Bell', cat: 'Engines', type: 'engine',
     w: 2, h: 3.0, mass: 700, cd: 0.9,
-    engine: { thrust: 120e3, ispVac: 375, ispSl: 130, gimbal: 0.09 },
+    engine: { thrust: 120e3, ispVac: 375, ispSl: 130, gimbal: 0.14 },
     desc: 'Vacuum-optimised. Terrible at sea level, superb in space.',
     draw: drawEngine
   });
   add({
     id: 'eng_ion', name: 'Ion Drive', cat: 'Engines', type: 'engine',
     w: 1, h: 1.2, mass: 90, cd: 0.9,
-    engine: { thrust: 3e3, ispVac: 2800, ispSl: 90, gimbal: 0.04 },
+    engine: { thrust: 3e3, ispVac: 2800, ispSl: 90, gimbal: 0.08 },
     desc: 'Feeble thrust, absurd efficiency. Deep-space only.',
     draw: drawEngine
   });
@@ -473,7 +523,7 @@
   add({ id: 'adapt_sm', name: 'Adapter S→M', cat: 'Struct', type: 'adapter', w: 2, h: 1.2, topW: 1, mass: 110, cd: 0.8, draw: drawAdapter, desc: 'Medium below, small above.' });
   add({ id: 'adapt_ml', name: 'Adapter M→L', cat: 'Struct', type: 'adapter', w: 4, h: 1.6, topW: 2, mass: 300, cd: 0.8, draw: drawAdapter, desc: 'Large below, medium above.' });
   add({ id: 'leg', name: 'Landing Leg', cat: 'Struct', type: 'leg', w: 1.2, h: 2.0, mass: 70, radial: true, cd: 1.0, draw: drawLeg, desc: 'Triples your survivable touchdown speed.' });
-  add({ id: 'rcs', name: 'RCS Block', cat: 'Struct', type: 'rcs', w: 0.6, h: 0.8, mass: 40, radial: true, cd: 1.0, authority: 0.16, draw: drawRcs, desc: 'Extra turning authority, anywhere.' });
+  add({ id: 'rcs', name: 'RCS Block', cat: 'Struct', type: 'rcs', w: 0.6, h: 0.8, mass: 40, radial: true, cd: 1.0, authority: 0.60, draw: drawRcs, desc: 'Extra turning authority, anywhere.' });
 
   /* ── couplers ───────────────────────────────────────────────
      Vertical  : in-line truss, rigidly joins the stack above to the stack below.

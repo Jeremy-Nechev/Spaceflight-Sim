@@ -48,11 +48,15 @@
     const b = v.nearBody || W.soiBody(v.x, v.y, t);
     const bp = W.bodyPos(b, t);
     const want = Math.PI / 2 - Math.atan2(v.y - bp.y, v.x - bp.x);
-    if (snap) { cam.x = v.x; cam.y = v.y; cam.rot = want; cam.zoom = cam.zoomT; }
+    // Position tracks exactly. Easing it leaves a steady-state lag of
+    // speed/rate metres, which at orbital speed is hundreds of metres — enough
+    // to push the craft clean off a zoomed-in screen. The craft's own motion is
+    // already smooth, so there is nothing here worth filtering.
+    cam.x = v.x;
+    cam.y = v.y;
+    if (snap) { cam.rot = want; cam.zoom = cam.zoomT; }
     else {
-      cam.x = U.smooth(cam.x, v.x, 14, dt);
-      cam.y = U.smooth(cam.y, v.y, 14, dt);
-      cam.rot += U.wrap(want - cam.rot) * (1 - Math.exp(-4 * dt));
+      cam.rot += U.wrap(want - cam.rot) * (1 - Math.exp(-6 * dt));
       cam.zoom = U.smooth(cam.zoom, cam.zoomT, 9, dt);
     }
   };

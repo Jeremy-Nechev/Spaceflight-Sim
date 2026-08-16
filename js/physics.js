@@ -17,8 +17,15 @@
   const CONTACT_K = 420;     // contact spring, per kg
   const CONTACT_C = 42;      // contact damper, per kg
   const FRICTION = 0.72;
-  const MAX_RATE = 1.15;     // rad/s the attitude controller aims for
+  const MAX_RATE = 1.9;      // rad/s the attitude controller aims for
+  const RATE_GAIN = 5.0;     // how hard it chases that rate
   const CHUTE_RIP_Q = 45000; // dynamic pressure that shreds a canopy (Pa)
+  // How much of the cross-flow restoring torque is applied. At full strength it
+  // reaches ~500 kN·m at max q, which buries the ~150 kN·m the wheels and
+  // gimbal can muster and leaves the craft unable to turn during the gravity
+  // turn. The drag *force* is unscaled, so ascent losses stay honest — only the
+  // weathervaning moment is softened, and fins still point the nose forward.
+  const AERO_TQ = 0.30;
 
   const _g = { x: 0, y: 0 };
   const _wp = { x: 0, y: 0 };
@@ -113,7 +120,7 @@
         const err = U.wrap(target - v.angle);
         wantRate = U.clamp(err * 1.7, -MAX_RATE, MAX_RATE) + v.steer * MAX_RATE;
       }
-      cmd = U.clamp((wantRate - v.omega) * 3.0, -1, 1);
+      cmd = U.clamp((wantRate - v.omega) * RATE_GAIN, -1, 1);
       Tq += cmd * auth * v.inertia;
     }
 
@@ -179,11 +186,12 @@
           const fx = -lvx * f, fy = -lvy * f;
           v.worldOf(it.p, _wp);
           Fx += fx; Fy += fy;
-          Tq += (_wp.x - v.x) * fy - (_wp.y - v.y) * fx;
+          Tq += ((_wp.x - v.x) * fy - (_wp.y - v.y) * fx) * AERO_TQ;
         }
       }
-      // rotational damping from cross-flow
-      Tq -= 0.5 * rho * speed * v.omega * A.damp * DRAG_K * 0.6;
+      // rotational damping from cross-flow — kept light so the craft stays
+      // steerable at max q; the per-part cross-flow above still weathervanes it
+      Tq -= 0.5 * rho * speed * v.omega * A.damp * DRAG_K * 0.3;
 
       // parachutes
       for (const p of A.chutes) {
@@ -237,7 +245,7 @@
     v.y += v.vy * dt;
 
     v.omega += (Tq / v.inertia) * dt;
-    if (Math.abs(v.omega) > 3.2) v.omega = 3.2 * U.sign(v.omega);
+    if (Math.abs(v.omega) > 4.2) v.omega = 4.2 * U.sign(v.omega);
     v.angle = U.wrap(v.angle + v.omega * dt);
 
     /* ── resting ── */
