@@ -23,7 +23,7 @@
 
   const cam = B.cam = { x: 0, y: 8, zoom: 13 };
   let undoStack = [];
-  let pointer = { x: 0, y: 0, sx: 0, sy: 0, down: false, drag: false, panX: 0, panY: 0 };
+  let pointer = { x: 0, y: 0, sx: 0, sy: 0, down: false, drag: false, panX: 0, panY: 0, overPalette: false };
   let cw = 0, ch = 0;
 
   /* ═══════════════════ blueprint helpers ═══════════════════ */
@@ -352,13 +352,17 @@
       pointer.grab = p;
       pointer.grabDX = w.x - p.lx;
       pointer.grabDY = w.y - p.ly;
+      pointer.overPalette = false;
     } else {
       B.sel = null;
       pointer.grab = null;
     }
   };
 
-  B.pointerMove = function (sx, sy) {
+  /** true while a placed part is being held over the catalog panel — releasing it there deletes it */
+  B.isGrabbing = function () { return !!pointer.grab; };
+
+  B.pointerMove = function (sx, sy, overPalette) {
     const w = toWorld(sx, sy);
     pointer.x = w.x; pointer.y = w.y;
     if (!pointer.down) return;
@@ -367,6 +371,8 @@
     if (!pointer.drag) return;
 
     if (pointer.grab) {
+      pointer.overPalette = !!overPalette;
+      if (pointer.overPalette) return;   // hovering the catalog — releasing here deletes the part instead of placing it
       if (!pointer.moved) { pushUndo(); pointer.moved = true; }
       const sn = snapFor(pointer.grab.def, w.x - pointer.grabDX, w.y - pointer.grabDY, pointer.grab);
       pointer.grab.lx = sn.x;
@@ -379,8 +385,12 @@
   };
 
   B.pointerUp = function () {
-    if (pointer.moved) B.changed();
-    pointer.down = false; pointer.grab = null; pointer.moved = false;
+    if (pointer.grab && pointer.overPalette) {
+      B.remove(pointer.grab);          // dropped back into the catalog — discard it
+    } else if (pointer.moved) {
+      B.changed();
+    }
+    pointer.down = false; pointer.grab = null; pointer.moved = false; pointer.overPalette = false;
   };
 
   B.wheel = function (d) {

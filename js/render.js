@@ -48,7 +48,12 @@
     return best;
   };
 
+  /** main.js hands us the canvas size so callers that don't already have it
+      on hand (e.g. flight.js's off-screen checks) can still ask for it */
+  R.setSize = function (w, h) { R._cw = w; R._ch = h; };
+
   R.viewR = function (cw, ch) {
+    cw = cw || R._cw || 0; ch = ch || R._ch || 0;
     return 0.5 * Math.hypot(cw, ch) / (cam.map ? cam.mapZoom : cam.zoom);
   };
 
@@ -806,19 +811,49 @@
 
   FX.explode = function (v) {
     const R0 = v.radius();
-    for (let i = 0; i < 70; i++) {
-      const a = Math.random() * U.TAU, s = 6 + Math.random() * 70;
-      const hot = i < 40;
+
+    // fireball — the fast, bright core of the blast
+    for (let i = 0; i < 40; i++) {
+      const a = Math.random() * U.TAU, s = 20 + Math.random() * 110;
       push({
         x: v.x + (Math.random() - 0.5) * R0, y: v.y + (Math.random() - 0.5) * R0,
         vx: v.vx * 0.5 + Math.cos(a) * s, vy: v.vy * 0.5 + Math.sin(a) * s,
-        life: 0, max: hot ? 0.6 + Math.random() * 0.8 : 4.5 + Math.random() * 4.5,
-        r0: R0 * 0.12, r1: R0 * (hot ? 0.6 : 1.9),
-        col: hot ? [255, 190, 90] : [70, 70, 74],
-        a0: hot ? 1 : 0.7, drag: 0.8, grav: hot ? 0 : 0.6,
+        life: 0, max: 0.6 + Math.random() * 0.8,
+        r0: R0 * 0.12, r1: R0 * 0.65,
+        col: [255, 190, 90], a0: 1, drag: 0.8, grav: 0,
         gdrag: 0.9, bounce: 0
       });
     }
+
+    // sparks — a quick shower of embers flung clear of the fireball
+    for (let i = 0; i < 26; i++) {
+      const a = Math.random() * U.TAU, s = 70 + Math.random() * 190;
+      push({
+        x: v.x + (Math.random() - 0.5) * R0 * 0.6, y: v.y + (Math.random() - 0.5) * R0 * 0.6,
+        vx: v.vx * 0.5 + Math.cos(a) * s, vy: v.vy * 0.5 + Math.sin(a) * s,
+        life: 0, max: 0.25 + Math.random() * 0.55,
+        r0: R0 * 0.03, r1: R0 * 0.09,
+        col: [255, 235, 180], a0: 1, drag: 1.4, grav: 0.4,
+        gdrag: 0.9, bounce: 0.2
+      });
+    }
+
+    // smoke — a big, dark, slow-rising column that lingers long after the
+    // fire has died down, so the wreck keeps smouldering on screen
+    for (let i = 0; i < 90; i++) {
+      const a = Math.random() * U.TAU, s = 4 + Math.random() * 36;
+      const dark = Math.random() < 0.55;
+      push({
+        x: v.x + (Math.random() - 0.5) * R0 * 1.4, y: v.y + (Math.random() - 0.5) * R0 * 1.4,
+        vx: v.vx * 0.5 + Math.cos(a) * s, vy: v.vy * 0.5 + Math.sin(a) * s,
+        life: 0, max: 6 + Math.random() * 7,
+        r0: R0 * 0.2, r1: R0 * (2.4 + Math.random() * 1.4),
+        col: dark ? [35, 33, 32] : [95, 92, 88],
+        a0: 0.82, drag: 0.55, grav: -0.14,      // negative grav: the plume billows upward, not down
+        gdrag: 0.9, bounce: 0
+      });
+    }
+
     if (S.audio) S.audio.boom(1.2);
   };
 

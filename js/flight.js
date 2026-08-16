@@ -27,6 +27,8 @@
   F.el = null;
 
   let predTimer = 0, hudTimer = 0, smashCount = 0;
+  let pendingEnd = null;                  // { title, text, delay } — holds the mission-failed panel back while the wreck burns
+  let echoVessels = [];                   // spent stages still burning after separation, kept audible until off screen
 
   /* ═══════════════════ mission log ═══════════════════ */
 
@@ -87,6 +89,8 @@
     F.warpIdx = 0;
     F.over = null;
     smashCount = 0;
+    pendingEnd = null;
+    echoVessels = [];
     F.reachedSpace = false;
 
     const v = S.vessel.fromBlueprint(F.bp);
@@ -149,6 +153,14 @@
         F.vessels.push(nv);
       }
       if (res.primary) F.focus = res.primary;
+      // a discarded piece can still be burning down (e.g. a booster cut loose
+      // mid-flame) — its engine sound keeps playing until it drifts off screen
+      // instead of snapping silent the instant we stop flying it
+      for (const nv of res.vessels) {
+        if (nv !== F.focus && nv.parts.some(p => p.def.type === 'engine' && p.active)) {
+          echoVessels.push(nv);
+        }
+      }
     }
     F.refreshStages();
     F.predict(true);
@@ -235,9 +247,34 @@
     cleanup();
     checkGoals();
 
+    // let the explosion play out before the mission-failed panel covers it
+    if (pendingEnd) {
+      pendingEnd.delay -= real;
+      if (pendingEnd.delay <= 0) {
+        endMission(pendingEnd.title, pendingEnd.text);
+        pendingEnd = null;
+      }
+    }
+
     if (S.audio && v) {
       const thr = v.liveThrust ? U.clamp(v.liveThrust / (v.mass * 12), 0, 1) : 0;
-      S.audio.engine(rails ? 0 : thr, v.atmoF || 0);
+      let hi = rails ? 0 : thr, atmoF = v.atmoF || 0;
+
+      // a spent stage can still be lit when we cut it loose (e.g. a booster
+      // burning out) — keep its engine noise alive until it drifts off screen
+      // rather than cutting straight to whatever the new focus is doing
+      for (let i = echoVessels.length - 1; i >= 0; i--) {
+        const ev = echoVessels[i];
+        const spent = ev.dead || F.vessels.indexOf(ev) < 0 || !(ev.liveThrust > 0);
+        const offscreen = Math.hypot(ev.x - v.x, ev.y - v.y) > R.viewR() * 1.4;
+        if (spent || offscreen) { echoVessels.splice(i, 1); continue; }
+        if (!rails) {
+          const eThr = U.clamp(ev.liveThrust / (ev.mass * 12), 0, 1);
+          if (eThr > hi) { hi = eThr; atmoF = ev.atmoF || 0; }
+        }
+      }
+
+      S.audio.engine(hi, atmoF);
     }
 
     predTimer -= real;
@@ -277,7 +314,9 @@
       if (ves.crash && !ves.dead) {
         ves.dead = true;
         S.fx.explode(ves);
-        if (ves === v) endMission('Mission Failed', 'Your craft ' + ves.crash + '.');
+        if (ves === v && !pendingEnd) {
+          pendingEnd = { title: 'Mission Failed', text: 'Your craft ' + ves.crash + '.', delay: 2 };
+        }
       }
       if (ves.dead) { F.vessels.splice(i, 1); continue; }
       if (ves !== v && v) {

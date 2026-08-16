@@ -47,6 +47,7 @@
     canvas.style.width = cw + 'px';
     canvas.style.height = ch + 'px';
     B.setSize(cw, ch);
+    R.setSize(cw, ch);
   }
 
   function setScene(s) {
@@ -426,6 +427,13 @@
 
   /* ═══════════════════ input ═══════════════════ */
 
+  /** the canvas keeps pointer capture during a drag, so a screen-space rect
+      check is how we tell a placed part is being dragged back over the catalog */
+  function overPalette(x, y) {
+    const r = document.getElementById('palette').getBoundingClientRect();
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  }
+
   function wireInput() {
     canvas.addEventListener('contextmenu', e => e.preventDefault());
 
@@ -452,7 +460,11 @@
         pinchD = d;
         return;
       }
-      if (scene === 'build') B.pointerMove(e.clientX, e.clientY);
+      if (scene === 'build') {
+        const overPal = B.isGrabbing() && overPalette(e.clientX, e.clientY);
+        document.getElementById('palette').classList.toggle('dropTarget', overPal);
+        B.pointerMove(e.clientX, e.clientY, overPal);
+      }
       else if (scene === 'flight' && mapDrag) {
         const z = R.cam.mapZoom;
         R.cam.offX = mapDrag.ox - (e.clientX - mapDrag.x) / z;
@@ -463,7 +475,10 @@
     const up = e => {
       pointers.delete(e.pointerId);
       if (pointers.size < 2) pinchD = 0;
-      if (scene === 'build') B.pointerUp();
+      if (scene === 'build') {
+        B.pointerUp();
+        document.getElementById('palette').classList.remove('dropTarget');
+      }
       // a click (not a drag) on a world in map view plans a transfer to it
       if (scene === 'flight' && mapDrag && e.button !== 2) {
         const moved = Math.hypot(e.clientX - mapDrag.x, e.clientY - mapDrag.y);
