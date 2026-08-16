@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#05070f" />
+<title>Spaceflight Simulator</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%9A%80%3C/text%3E%3C/svg%3E" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<canvas id="game"></canvas>
+
+<!-- ══════════════════════ MAIN MENU ══════════════════════ -->
+<div id="menu" class="overlay">
+  <div class="menuCard">
+    <h1>SPACEFLIGHT <span>SIMULATOR</span></h1>
+    <p class="tag">Build a rocket. Reach orbit. Land on the Moon. Come home.</p>
+    <div class="menuBtns">
+      <button id="mBuild" class="primary big">🛠 Build a Rocket</button>
+      <button id="mQuick" class="big">🚀 Quick Launch</button>
+      <button id="mHelp" class="big">⌨ Controls</button>
+    </div>
+    <h3 class="miniHead">Mission Log</h3>
+    <div id="progressList" class="progressList"></div>
+  </div>
+</div>
+
+<!-- ══════════════════════ HELP ══════════════════════ -->
+<div id="help" class="overlay hidden">
+  <div class="menuCard narrow">
+    <h2>Controls</h2>
+    <div class="keyGrid">
+      <b>W / S</b><span>Throttle up / down</span>
+      <b>Z / X</b><span>Full throttle / cut</span>
+      <b>A / D</b><span>Rotate left / right</span>
+      <b>Space</b><span>Fire next stage</span>
+      <b>T</b><span>Cycle stability assist</span>
+      <b>M</b><span>Map view</span>
+      <b>, / .</b><span>Time warp down / up</span>
+      <b>Wheel / pinch</b><span>Zoom</span>
+      <b>R</b><span>Revert to launch</span>
+      <b>B</b><span>Back to the build hangar</span>
+      <b>Esc</b><span>Menu</span>
+    </div>
+    <h2>Building</h2>
+    <div class="keyGrid">
+      <b>Click part</b><span>Pick it up, click again to place</span>
+      <b>Drag part</b><span>Move an already-placed part</span>
+      <b>Right-click</b><span>Delete a part</span>
+      <b>Ctrl+Z</b><span>Undo</span>
+      <b>Mirror</b><span>Auto-places fins / boosters on both sides</span>
+    </div>
+    <button id="helpClose" class="primary big">Got it</button>
+  </div>
+</div>
+
+<!-- ══════════════════════ BUILD SCENE ══════════════════════ -->
+<div id="buildUI" class="scene hidden">
+  <div class="bar top">
+    <button data-act="menu" title="Menu">☰</button>
+    <span class="barTitle">VEHICLE ASSEMBLY</span>
+    <span class="spacer"></span>
+    <button data-act="mirror" id="mirrorBtn">Mirror: ON</button>
+    <button data-act="undo">↶ Undo</button>
+    <button data-act="clear">Clear</button>
+    <button data-act="save">💾 Save</button>
+    <button data-act="load">📂 Load</button>
+    <button data-act="launch" class="primary">LAUNCH ▶</button>
+  </div>
+
+  <div id="palette">
+    <div id="palCats"></div>
+    <div id="palList"></div>
+  </div>
+
+  <div id="buildStats"></div>
+
+  <div id="stageEdit">
+    <div class="seHead"><span>STAGE GROUPS</span><button id="seAuto" title="Rebuild groups from the layout">Auto</button></div>
+    <div id="seList"></div>
+    <button id="seAdd" class="seAdd">+ Add stage</button>
+    <div class="seHint">Click a part chip, then a stage row to move it there.</div>
+  </div>
+
+  <div id="buildHint" class="hint">Pick a part on the left, then click in the hangar to place it.</div>
+
+  <div id="blueprintPanel" class="panel hidden">
+    <h3>Blueprints</h3>
+    <div id="bpList"></div>
+    <div class="row">
+      <input id="bpName" type="text" placeholder="Rocket name" maxlength="24" />
+      <button id="bpSave" class="primary">Save</button>
+    </div>
+    <button id="bpClose">Close</button>
+  </div>
+</div>
+
+<!-- ══════════════════════ FLIGHT SCENE ══════════════════════ -->
+<div id="flightUI" class="scene hidden">
+  <div class="bar top">
+    <button data-act="menu" title="Menu">☰</button>
+    <button data-act="build">↩ Build</button>
+    <button data-act="revert">⟲ Revert</button>
+    <span class="spacer"></span>
+    <div class="warpBox">
+      <button data-act="warpDown">◀</button>
+      <span id="warpDisp">1×</span>
+      <button data-act="warpUp">▶</button>
+    </div>
+    <button data-act="map" id="mapBtn">🗺 Map</button>
+  </div>
+
+  <div id="hud">
+    <div class="hudRow"><span>Altitude</span><b id="hAlt">0 m</b></div>
+    <div class="hudRow"><span>Speed</span><b id="hSpd">0 m/s</b></div>
+    <div class="hudRow"><span>Vertical</span><b id="hVs">0 m/s</b></div>
+    <div class="hudRow"><span>Apoapsis</span><b id="hAp">—</b></div>
+    <div class="hudRow"><span>Periapsis</span><b id="hPe">—</b></div>
+    <div class="hudRow"><span>TWR</span><b id="hTwr">0.00</b></div>
+    <div class="hudRow"><span>Δv left</span><b id="hDv">0 m/s</b></div>
+    <div class="hudRow soi"><span>Sphere</span><b id="hSoi">Earth</b></div>
+  </div>
+
+  <div id="fuelBox">
+    <div class="fuelLabel">FUEL</div>
+    <div class="fuelBar"><div id="fuelFill"></div></div>
+    <div id="fuelTxt">0%</div>
+  </div>
+
+  <div id="stagePanel"></div>
+
+  <div id="sasBox">
+    <button data-sas="off" class="on">Off</button>
+    <button data-sas="hold">Hold</button>
+    <button data-sas="pro">Pro</button>
+    <button data-sas="retro">Retro</button>
+    <button data-sas="up">Up</button>
+  </div>
+
+  <div id="controls">
+    <div id="throttleWrap">
+      <div id="throttleBar"><div id="throttleFill"></div></div>
+      <div id="throttleTxt">0%</div>
+    </div>
+    <div id="rotWrap">
+      <button id="rotL" class="rotBtn">↺</button>
+      <button id="rotR" class="rotBtn">↻</button>
+    </div>
+    <button id="btnStage">STAGE</button>
+  </div>
+
+  <div id="toast"></div>
+
+  <div id="endOverlay" class="overlay hidden">
+    <div class="menuCard narrow">
+      <h2 id="endTitle">Mission Over</h2>
+      <p id="endText"></p>
+      <div class="menuBtns">
+        <button id="endRevert" class="primary big">⟲ Revert to Launch</button>
+        <button id="endBuild" class="big">🛠 Back to Hangar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="partTip" class="hidden"></div>
+
+<script src="js/util.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/parts.js"></script>
+<script src="js/world.js"></script>
+<script src="js/vessel.js"></script>
+<script src="js/physics.js"></script>
+<script src="js/render.js"></script>
+<script src="js/builder.js"></script>
+<script src="js/flight.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
