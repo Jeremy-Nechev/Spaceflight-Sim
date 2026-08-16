@@ -10,7 +10,6 @@ No build step, no dependencies. Plain HTML + CSS + JavaScript on a single
 ---
 
 ## Play
-
 Open `index.html`, or serve the folder:
 
 ```bash
