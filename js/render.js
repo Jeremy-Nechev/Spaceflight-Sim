@@ -682,14 +682,26 @@
 
   const FX = S.fx = {};
   const parts = [];
-  const MAXP = 1200;
+  const MAXP = 2400;
   FX.onNote = null;
 
   function push(o) {
-    if (parts.length >= MAXP) return;
     if (o.bounce == null) o.bounce = 0;      // how much it rebounds off the ground
     if (o.gdrag == null) o.gdrag = 0.90;     // how fast it slows once it's down
+    // At the budget, retire the oldest rather than refusing the newest —
+    // otherwise a heavy smoker starves its own plume at the nozzle and the
+    // trail is made entirely of stale puffs.
+    if (parts.length >= MAXP) parts.shift();
     parts.push(o);
+  }
+
+  /**
+   * Puff radius over its life. Smoke billows out fast the moment it leaves the
+   * nozzle and then keeps drifting, so growth is front-loaded — linear growth
+   * left a thin gap right behind the rocket.
+   */
+  function radiusOf(p) {
+    return U.lerp(p.r0, p.r1, Math.sqrt(p.life / p.max));
   }
 
   FX.note = function (msg, kind) { if (FX.onNote) FX.onNote(msg, kind); };
@@ -704,24 +716,36 @@
     const thick = sm > 1;
     if (!thick && atmoF < 0.06) return;
     const dens = thick ? Math.max(atmoF, 0.55) : atmoF;
-    if (Math.random() > dt * 45 * sm * p.throttle) return;
+
+    // Emit a *count*, not a coin flip — a single spawn per call silently
+    // capped a 6× smoker at 1× no matter what the multiplier said.
+    const want = dt * 48 * (thick ? Math.sqrt(sm) * 1.15 : 1) * p.throttle;
+    let count = Math.floor(want);
+    if (Math.random() < want - count) count++;
+    if (!count) return;
 
     v.worldOf(p, _pw);
     const n = v.noseDir();
     const w = p.def.w;
     const sp = 22 + 40 * p.throttle;
-    const spread = w * (thick ? 1.6 : 0.8);
-    const jx = (Math.random() - 0.5) * spread, jy = (Math.random() - 0.5) * spread;
-    push({
-      x: _pw.x - n.x * p.def.h * 0.6 + jx, y: _pw.y - n.y * p.def.h * 0.6 + jy,
-      vx: v.vx - n.x * sp + (Math.random() - 0.5) * (thick ? 30 : 14),
-      vy: v.vy - n.y * sp + (Math.random() - 0.5) * (thick ? 30 : 14),
-      life: 0, max: (5.0 + Math.random() * 5.5) * (thick ? 1.6 : 1),
-      r0: w * 0.45, r1: w * (2.8 + 3.4 * dens) * (thick ? 1.9 : 1),
-      col: thick ? [246, 244, 240] : [235, 235, 240],
-      a0: 0.26 * dens, drag: 0.85, grav: 0,
-      gdrag: 0.94, bounce: 0
-    });
+    const spread = w * (thick ? 1.7 : 0.8);
+    const scatter = thick ? 32 : 14;
+
+    for (let i = 0; i < count; i++) {
+      const jx = (Math.random() - 0.5) * spread, jy = (Math.random() - 0.5) * spread;
+      // stagger along the exhaust so a burst doesn't land as one clump
+      const back = p.def.h * 0.6 + Math.random() * w * 1.2;
+      push({
+        x: _pw.x - n.x * back + jx, y: _pw.y - n.y * back + jy,
+        vx: v.vx - n.x * sp + (Math.random() - 0.5) * scatter,
+        vy: v.vy - n.y * sp + (Math.random() - 0.5) * scatter,
+        life: 0, max: (5.5 + Math.random() * 6) * (thick ? 1.9 : 1),
+        r0: w * (thick ? 1.1 : 0.6), r1: w * (2.8 + 3.4 * dens) * (thick ? 2.6 : 1.15),
+        col: thick ? [246, 244, 240] : [235, 235, 240],
+        a0: (thick ? 0.34 : 0.30) * dens, drag: 0.85, grav: 0,
+        gdrag: 0.94, bounce: 0
+      });
+    }
   };
 
   FX.dust = function (v, b, t, speed) {
@@ -837,8 +861,7 @@
       if (body.sea && gr < body.seaLevel) gr = body.seaLevel;   // rest on the water
       // sit the puff *on* the surface, not centred in it — and keep doing so as
       // it swells, otherwise a growing cloud sinks back into the ground
-      const curR = U.lerp(p.r0, p.r1, p.life / p.max);
-      const rest = gr + curR * 0.55;
+      const rest = gr + radiusOf(p) * 0.55;
       if (r >= rest) continue;
 
       const nx = dx / r, ny = dy / r;
@@ -864,16 +887,21 @@
     }
   };
 
-  FX.draw = function (ctx, zoom) {
+  FX.draw = function (ctx, zoom, viewR) {
+    const cull = viewR ? viewR * 1.4 : Infinity;
     for (let i = 0; i < parts.length; i++) {
       const p = parts[i];
       const k = p.life / p.max;
-      const r = U.lerp(p.r0, p.r1, k);
+      const r = radiusOf(p);
       if (r * zoom < 0.35) continue;
-      ctx.globalAlpha = p.a0 * (1 - k * k);
+      const dx = p.x - cam.x, dy = p.y - cam.y;
+      if (Math.abs(dx) - r > cull || Math.abs(dy) - r > cull) continue;
+      // hold opacity through most of the life, then fade — a squared falloff
+      // made the trail wash out while it was still close behind the rocket
+      ctx.globalAlpha = p.a0 * (1 - k * k * k);
       ctx.fillStyle = 'rgb(' + p.col[0] + ',' + p.col[1] + ',' + p.col[2] + ')';
       ctx.beginPath();
-      ctx.arc(p.x - cam.x, p.y - cam.y, r, 0, U.TAU);
+      ctx.arc(dx, dy, r, 0, U.TAU);
       ctx.fill();
     }
     ctx.globalAlpha = 1;
@@ -1127,7 +1155,7 @@
 
     for (const ves of G.vessels) if (!ves.dead) R.drawVessel(ctx, ves, t, cam.zoom);
 
-    FX.draw(ctx, cam.zoom);
+    FX.draw(ctx, cam.zoom, viewR);
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     drawVelocityMarker(ctx, cw, ch, dpr, G);
