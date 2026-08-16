@@ -217,9 +217,14 @@ button:disabled{opacity:.4;cursor:default}
   background:var(--panel);border:1px solid var(--edge);border-radius:10px;
 }
 .fuelLabel{font-size:10px;letter-spacing:2px;color:var(--dim);margin-bottom:5px}
-.fuelBar{height:9px;background:rgba(0,0,0,.5);border-radius:5px;overflow:hidden;border:1px solid rgba(255,255,255,.08)}
-#fuelFill{height:100%;width:100%;background:linear-gradient(90deg,#ff8a2b,#ffc46b);transition:width .15s}
-#fuelTxt{font-family:var(--mono);font-size:11px;color:var(--dim);margin-top:4px;text-align:right}
+#fuelBars{display:flex;flex-direction:column;gap:5px}
+.fuelRow{display:flex;align-items:center;gap:7px}
+.fuelBar{flex:1;height:9px;background:rgba(0,0,0,.5);border-radius:5px;overflow:hidden;border:1px solid rgba(255,255,255,.08)}
+.fuelRow.firing .fuelBar{border-color:rgba(255,159,67,.55);box-shadow:0 0 6px rgba(255,159,67,.35)}
+.fuelFill{height:100%;width:100%;background:linear-gradient(90deg,#ff8a2b,#ffc46b);transition:width .15s}
+.fuelFill.empty{background:rgba(255,255,255,.08)}
+.fuelPct{font-family:var(--mono);font-size:11px;color:var(--dim);min-width:32px;text-align:right}
+.fuelNone{font-family:var(--mono);font-size:11px;color:var(--dim);text-align:right}
 
 #stagePanel{
   position:absolute;right:10px;top:56px;width:180px;max-height:52vh;overflow:auto;

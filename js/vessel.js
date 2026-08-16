@@ -288,6 +288,28 @@
     return take;
   };
 
+  /**
+   * Per-compartment fuel breakdown for the HUD — one entry per physically
+   * isolated tank group (a separator walls compartments off from each
+   * other, same as `rebuildGraph`), including a solid motor's own charge,
+   * which `fuelIn` deliberately leaves out since engines can't draw on it.
+   * Biggest tank first, so the main stack usually leads and boosters
+   * (which `fuelIn()` alone would otherwise blend into one shared bar)
+   * trail behind it as their own separate entries.
+   */
+  Vessel.prototype.fuelGroups = function () {
+    const byComp = new Map();
+    for (const p of this.parts) {
+      if (p.def.fuel <= 0) continue;
+      let g = byComp.get(p.comp);
+      if (!g) { g = { comp: p.comp, cur: 0, cap: 0, firing: false }; byComp.set(p.comp, g); }
+      g.cur += p.def.fuel * p.fuel;
+      g.cap += p.def.fuel;
+      if (p.def.type === 'engine' && p.active && p.throttle > 0.01) g.firing = true;
+    }
+    return [...byComp.values()].filter(g => g.cap > 0).sort((a, b) => b.cap - a.cap);
+  };
+
   /* ═══════════════════ capability queries ═══════════════════ */
 
   Vessel.prototype.authority = function () {

@@ -464,6 +464,36 @@
     if (e && e.textContent !== txt) e.textContent = txt;
   };
 
+  /** one bar per fuel compartment, so separated boosters no longer get
+      blended into the same reading as the main stack */
+  let fuelSig = '';
+  function paintFuel(v) {
+    const box = document.getElementById('fuelBars');
+    if (!box) return;
+    const groups = v.fuelGroups();
+    if (!groups.length) {
+      if (fuelSig !== 'none') { box.innerHTML = '<div class="fuelNone">no tanks</div>'; fuelSig = 'none'; }
+      return;
+    }
+    const sig = groups.map(g => g.comp).join(',');
+    if (sig !== fuelSig) {
+      box.innerHTML = groups.map((_, i) =>
+        '<div class="fuelRow"><div class="fuelBar"><div class="fuelFill" data-i="' + i + '"></div></div>' +
+        '<span class="fuelPct" data-i="' + i + '"></span></div>'
+      ).join('');
+      fuelSig = sig;
+    }
+    groups.forEach((g, i) => {
+      const pct = g.cap > 0 ? g.cur / g.cap : 0;
+      const fill = box.querySelector('.fuelFill[data-i="' + i + '"]');
+      const txt = box.querySelector('.fuelPct[data-i="' + i + '"]');
+      const row = fill && fill.closest('.fuelRow');
+      if (fill) { fill.style.width = (pct * 100).toFixed(1) + '%'; fill.classList.toggle('empty', pct <= 0.001); }
+      if (txt) txt.textContent = Math.round(pct * 100) + '%';
+      if (row) row.classList.toggle('firing', g.firing);
+    });
+  }
+
   F.hud = function () {
     const v = F.focus;
     if (!v) return;
@@ -499,11 +529,7 @@
     set('hDv', U.speed(v.stageDv()));
     set('hSoi', (W.soiBody(v.x, v.y, F.t)).name + (v.landed ? ' · landed' : ''));
 
-    const f = v.fuelIn();
-    const pct = f.cap > 0 ? f.cur / f.cap : 0;
-    const fill = document.getElementById('fuelFill');
-    if (fill) fill.style.width = (pct * 100).toFixed(1) + '%';
-    set('fuelTxt', f.cap > 0 ? Math.round(pct * 100) + '%  ·  ' + U.mass(f.cur) : 'no tanks');
+    paintFuel(v);
 
     F.syncThrottle();
     updateStageHighlight();
