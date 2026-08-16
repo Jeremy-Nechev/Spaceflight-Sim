@@ -315,7 +315,7 @@
         ves.dead = true;
         S.fx.explode(ves);
         if (ves === v && !pendingEnd) {
-          pendingEnd = { title: 'Mission Failed', text: 'Your craft ' + ves.crash + '.', delay: 2 };
+          pendingEnd = { title: 'Mission Failed', text: 'Your craft ' + ves.crash + '.', delay: 5 };
         }
       }
       if (ves.dead) { F.vessels.splice(i, 1); continue; }
