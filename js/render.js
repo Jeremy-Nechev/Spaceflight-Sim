@@ -24,7 +24,28 @@
     x: 0, y: 0, zoom: 6, zoomT: 6, rot: 0,
     map: false, mapZoom: 8e-5, mapZoomT: 8e-5,
     offX: 0, offY: 0,                    // map-view pan, relative to the craft
-    minZoom: 2.2e-7, maxZoom: 14
+    // Zoom limits are bounded by the size of the system. Letting these run to
+    // 1e-7 meant you could zoom out ~800× further than anything worth looking
+    // at, and it then took dozens of wheel clicks to get back.
+    minZoom: 8e-6, maxZoom: 14,
+    mapMin: 1.2e-5, mapMax: 0.02,
+    mapDefault: 6.5e-5
+  };
+
+  /** which world is under this screen point in map view (null if none) */
+  R.pickBody = function (sx, sy, cw, ch, t) {
+    if (!cam.map) return null;
+    const z = cam.mapZoom;
+    const wx = cam.x + (sx - cw / 2) / z;
+    const wy = cam.y + (ch / 2 - sy) / z;
+    let best = null, bestD = Infinity;
+    for (const b of W.bodies) {
+      const bp = W.bodyPos(b, t);
+      const d = Math.hypot(wx - bp.x, wy - bp.y);
+      const reach = Math.max(b.radius * 1.4, 26 / z);
+      if (d < reach && d < bestD) { bestD = d; best = b; }
+    }
+    return best;
   };
 
   R.viewR = function (cw, ch) {
@@ -32,8 +53,17 @@
   };
 
   R.zoomBy = function (f) {
-    if (cam.map) cam.mapZoomT = U.clamp(cam.mapZoomT * f, cam.minZoom, 0.02);
-    else cam.zoomT = U.clamp(cam.zoomT * f, cam.minZoom, cam.maxZoom);
+    if (cam.map) {
+      // recover if it ever got stuck at zero or NaN, otherwise multiplying
+      // by the wheel factor can never climb back out
+      let z = cam.mapZoomT;
+      if (!isFinite(z) || z <= 0) z = cam.mapDefault;
+      cam.mapZoomT = U.clamp(z * f, cam.mapMin, cam.mapMax);
+    } else {
+      let z = cam.zoomT;
+      if (!isFinite(z) || z <= 0) z = 4;
+      cam.zoomT = U.clamp(z * f, cam.minZoom, cam.maxZoom);
+    }
   };
 
   R.follow = function (v, t, dt, snap) {
@@ -42,6 +72,8 @@
       // map view is north-up and drag-pannable
       cam.x = v.x + cam.offX;
       cam.y = v.y + cam.offY;
+      if (!isFinite(cam.mapZoomT) || cam.mapZoomT <= 0) cam.mapZoomT = cam.mapDefault;
+      if (!isFinite(cam.mapZoom) || cam.mapZoom <= 0) cam.mapZoom = cam.mapZoomT;
       cam.mapZoom = U.smooth(cam.mapZoom, cam.mapZoomT, 9, dt);
       return;
     }
@@ -183,14 +215,18 @@
     if (b.id === 'moon') drawCraters(ctx, b, rx, ry, Rr);
 
     // surface band: green where land pokes above sea level, blue where it doesn't
-    const band = Math.max(Rr * 0.062, 1.5 / zoom);
-    const rMid = Rr - band / 2;
+    // The band is widened at low zoom so it stays visible, but it must never
+    // grow past the globe itself — that drives the arc radius negative and
+    // canvas throws IndexSizeError.
+    const band = Math.min(Math.max(Rr * 0.062, 1.5 / zoom), Rr * 0.9);
+    const rMid = Math.max(Rr * 0.05, Rr - band / 2);
     const N = Math.round(U.clamp(Rr * zoom * 1.2, 128, 720));
+    const dth = U.TAU / N;
     ctx.lineWidth = band;
     ctx.lineCap = 'butt';
-    let start = 0, mat = matAt(b, 0);
+    let start = 0, mat = matAt(b, 0, dth);
     for (let i = 1; i <= N; i++) {
-      const m = i < N ? matAt(b, (i / N) * U.TAU) : null;
+      const m = i < N ? matAt(b, (i / N) * U.TAU, dth) : null;
       if (m !== mat || i === N) {
         ctx.beginPath();
         ctx.arc(rx, ry, rMid, (start / N) * U.TAU, (i / N) * U.TAU);
@@ -229,9 +265,9 @@
   }
 
   /** surface-band colour at a given angle, seen from orbit */
-  function matAt(b, th) {
-    if (!b.sea) return W.terrain(b, th) > b.seaLevel + 900 ? b.col.rock : b.col.land;
-    const r = W.terrain(b, th);
+  function matAt(b, th, dth) {
+    const r = W.terrain(b, th, dth);
+    if (!b.sea) return r > b.seaLevel + 900 ? b.col.rock : b.col.land;
     if (r < b.seaLevel) return r < b.seaLevel - 1400 ? b.col.waterDeep : b.col.water;
     return r > b.seaLevel + 1500 ? b.col.rock : b.col.land;
   }
@@ -267,6 +303,7 @@
     const full = halfAng >= Math.PI - 1e-6;
     const n = Math.round(U.clamp(halfAng * 2 * b.radius * zoom / 3.2, 90, 1000));
     const th0 = thC - halfAng, span = halfAng * 2;
+    const dth = span / n;                 // band-limit detail to what we sample
 
     const th = new Float64Array(n + 1);
     const rr = new Float64Array(n + 1);
@@ -275,7 +312,7 @@
     let minR = Infinity;
     for (let i = 0; i <= n; i++) {
       const a = th0 + (span * i) / n;
-      const r = W.terrain(b, a);
+      const r = W.terrain(b, a, dth);
       th[i] = a; rr[i] = r;
       px[i] = rx + Math.cos(a) * r;
       py[i] = ry + Math.sin(a) * r;
@@ -660,21 +697,30 @@
   FX.clear = function () { parts.length = 0; };
 
   FX.exhaust = function (v, p, T, atmoF, dt) {
-    if (atmoF < 0.06 || p.throttle < 0.1) return;
-    if (Math.random() > dt * 45 * p.throttle) return;
+    if (p.throttle < 0.1) return;
+    // solid motors carry their own oxidiser and belch aluminium-oxide smoke,
+    // so they keep smoking thickly even where the air is thin
+    const sm = (p.def.engine && p.def.engine.smoke) || 1;
+    const thick = sm > 1;
+    if (!thick && atmoF < 0.06) return;
+    const dens = thick ? Math.max(atmoF, 0.55) : atmoF;
+    if (Math.random() > dt * 45 * sm * p.throttle) return;
+
     v.worldOf(p, _pw);
     const n = v.noseDir();
     const w = p.def.w;
     const sp = 22 + 40 * p.throttle;
-    const jx = (Math.random() - 0.5) * w * 0.8, jy = (Math.random() - 0.5) * w * 0.8;
+    const spread = w * (thick ? 1.6 : 0.8);
+    const jx = (Math.random() - 0.5) * spread, jy = (Math.random() - 0.5) * spread;
     push({
       x: _pw.x - n.x * p.def.h * 0.6 + jx, y: _pw.y - n.y * p.def.h * 0.6 + jy,
-      vx: v.vx - n.x * sp + (Math.random() - 0.5) * 14,
-      vy: v.vy - n.y * sp + (Math.random() - 0.5) * 14,
-      life: 0, max: 5.0 + Math.random() * 5.5,
-      r0: w * 0.45, r1: w * (2.8 + 3.4 * atmoF),
-      col: [235, 235, 240], a0: 0.26 * atmoF, drag: 0.85, grav: 0,
-      gdrag: 0.93, bounce: 0
+      vx: v.vx - n.x * sp + (Math.random() - 0.5) * (thick ? 30 : 14),
+      vy: v.vy - n.y * sp + (Math.random() - 0.5) * (thick ? 30 : 14),
+      life: 0, max: (5.0 + Math.random() * 5.5) * (thick ? 1.6 : 1),
+      r0: w * 0.45, r1: w * (2.8 + 3.4 * dens) * (thick ? 1.9 : 1),
+      col: thick ? [246, 244, 240] : [235, 235, 240],
+      a0: 0.26 * dens, drag: 0.85, grav: 0,
+      gdrag: 0.94, bounce: 0
     });
   };
 
@@ -891,6 +937,46 @@
         const hp = W.bodyPos(pr.hit.body, t);
         markX(ctx, pr.hit.x + hp.x - cam.x, pr.hit.y + hp.y - cam.y, 7 / z, '#ff6b60');
       }
+    }
+
+    // planned transfer: the burn node and where it takes us
+    const plan = G.plan;
+    if (plan && plan.ok && plan.pts && plan.pts.length > 3) {
+      ctx.beginPath();
+      for (let i = 0; i < plan.pts.length; i += 2) {
+        const x = plan.pts[i] - cam.x, y = plan.pts[i + 1] - cam.y;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = 'rgba(255,190,90,.95)';
+      ctx.lineWidth = 1.8 / z;
+      ctx.setLineDash([9 / z, 6 / z]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // burn node
+      const bx = plan.burnX - cam.x, by = plan.burnY - cam.y;
+      const s = 6 / z;
+      ctx.beginPath();
+      ctx.arc(bx, by, s, 0, U.TAU);
+      ctx.fillStyle = '#ffbe5a';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(bx, by, s * 2.2, 0, U.TAU);
+      ctx.strokeStyle = 'rgba(255,190,90,.8)';
+      ctx.lineWidth = 1.4 / z;
+      ctx.stroke();
+    }
+
+    // the world we're aiming at
+    if (G.targetBody) {
+      const bp = W.bodyPos(G.targetBody, t);
+      const rr = Math.max(G.targetBody.radius * 1.5, 16 / z);
+      ctx.beginPath();
+      ctx.arc(bp.x - cam.x, bp.y - cam.y, rr, 0, U.TAU);
+      ctx.strokeStyle = 'rgba(255,190,90,.9)';
+      ctx.lineWidth = 1.6 / z;
+      ctx.setLineDash([5 / z, 5 / z]);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
 
     // apoapsis / periapsis markers

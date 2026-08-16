@@ -121,6 +121,21 @@
 
   /* ═══════════════════ editing ═══════════════════ */
 
+  /**
+   * Would a part of this size at (x,y) end up buried inside something already
+   * placed? Parts that merely touch edge-to-edge give an overlap of exactly 0,
+   * so only genuine intersections are rejected.
+   */
+  function overlaps(def, x, y, exclude) {
+    for (const p of B.parts) {
+      if (p === exclude) continue;
+      const ox = (p.def.w + def.w) / 2 - Math.abs(p.lx - x);
+      const oy = (p.def.h + def.h) / 2 - Math.abs(p.ly - y);
+      if (ox > 0.12 && oy > 0.12) return true;
+    }
+    return false;
+  }
+
   function snapFor(def, mx, my, exclude) {
     let bx = Math.round(mx / GRID) * GRID;
     let by = Math.round(my / GRID) * GRID;
@@ -139,7 +154,11 @@
       }
       for (const c of cands) {
         const d = Math.hypot(c.x - mx, c.y - my);
-        if (d < thr && d < best) { best = d; bx = c.x; by = c.y; bflip = c.f; }
+        if (d >= thr || d >= best) continue;
+        // A side node taken from a narrow part can sit inside a wider one
+        // alongside it — that welds boosters to the tank so they never release.
+        if (overlaps(def, c.x, c.y, exclude)) continue;
+        best = d; bx = c.x; by = c.y; bflip = c.f;
       }
     }
     return { x: bx, y: by, flip: bflip };
@@ -164,32 +183,46 @@
     if (!h) return;
     pushUndo();
     const sn = snapFor(h.def, x, y, null);
-    const main = place(h.def, sn.x, sn.y, sn.flip, h.uid);
+    const added = [place(h.def, sn.x, sn.y, sn.flip, h.uid)];
     if (B.mirror && h.def.radial && Math.abs(sn.x) > 0.15) {
-      place(h.def, -sn.x, sn.y, -sn.flip);
+      added.push(place(h.def, -sn.x, sn.y, -sn.flip));
     }
-    // new stageable parts join a sensible group automatically
-    if (stageable(main)) autoAssign(main);
+    // every new stageable part joins a group — including the mirrored twin,
+    // which used to be left out and so would never fire
+    autoAssign(added.filter(stageable));
     B.held = null;
     B.changed();
   };
 
-  /** slot a freshly placed part into the group nearest its height */
-  function autoAssign(p) {
+  /**
+   * Slot freshly placed parts into the group that matches their height and
+   * kind, or make a new group in the right firing position. Existing manual
+   * staging is preserved rather than being regenerated from scratch.
+   */
+  function autoAssign(list) {
+    if (!list.length) return;
     syncStages();
     if (!B.stages.length) { B.autoStage(); return; }
-    const y = p.ly - p.def.h / 2;
-    let best = -1, bestD = Infinity;
-    B.stages.forEach((g, i) => {
-      for (const u of g) {
-        const q = B.parts.find(z => z.uid === u);
-        if (!q) continue;
-        const d = Math.abs((q.ly - q.def.h / 2) - y);
+    const TOL = S.vessel.STAGE_TOL;
+
+    for (const p of list) {
+      const y = p.ly - p.def.h / 2;
+      let best = -1, bestD = Infinity;
+      B.stages.forEach((g, i) => {
+        const k = S.vessel.groupKey(B.parts, g);
+        if (k.kind !== p.def.type) return;          // never mix kinds
+        const d = Math.abs(k.y - y);
         if (d < bestD) { bestD = d; best = i; }
+      });
+      if (best >= 0 && bestD < TOL) { B.stages[best].push(p.uid); continue; }
+
+      // no home for it — insert a new group at the right point in the order
+      let at = B.stages.length;
+      for (let i = 0; i < B.stages.length; i++) {
+        if (S.vessel.groupKey(B.parts, B.stages[i]).y > y) { at = i; break; }
       }
-    });
-    if (best >= 0 && bestD < S.vessel.STAGE_TOL) B.stages[best].push(p.uid);
-    else B.autoStage();
+      B.stages.splice(at, 0, [p.uid]);
+    }
   }
 
   B.remove = function (p) {

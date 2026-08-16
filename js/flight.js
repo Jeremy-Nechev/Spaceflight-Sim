@@ -244,7 +244,19 @@
     if (predTimer <= 0) { F.predict(); predTimer = 0.3; }
 
     hudTimer -= real;
-    if (hudTimer <= 0) { F.hud(); hudTimer = 1 / 15; }
+    if (hudTimer <= 0) { F.hud(); if (F.target) F.paintXfer(); hudTimer = 1 / 15; }
+
+    // planning is expensive, so only redo it when the orbit has actually
+    // changed — i.e. shortly after a burn ends
+    if (F.target) {
+      const burning = (v && v.liveThrust > 0);
+      if (wasBurning && !burning) replanIn = 1.2;
+      wasBurning = burning;
+      if (replanIn > 0) {
+        replanIn -= real;
+        if (replanIn <= 0) F.replan();
+      }
+    }
   };
 
   function applyInput(v, real) {
@@ -317,6 +329,83 @@
     if (W.wrecked.size >= 25) unlock('demolition');
     smashCount = W.wrecked.size;
   }
+
+  /* ═══════════════════ transfer planning ═══════════════════ */
+
+  F.target = null;
+  F.plan = null;
+  let replanIn = 0, wasBurning = false;
+
+  F.setTarget = function (b) {
+    if (!b || b === F.target) { F.target = null; F.plan = null; }
+    else if (b === W.soiBody(F.focus.x, F.focus.y, F.t) && !b.orbit) {
+      F.toast('You are already orbiting ' + b.name, 'bad');
+      return;
+    } else F.target = b;
+    F.replan();
+  };
+
+  F.replan = function () {
+    if (!F.target || !F.focus || F.focus.dead) { F.plan = null; F.paintXfer(); return; }
+    F.plan = W.planTransfer(F.focus, F.target, F.t);
+    F.paintXfer();
+  };
+
+  /** seconds of burn needed at full throttle to deliver the planned Δv */
+  function burnSeconds(v, dv) {
+    let T = 0;
+    for (const p of v.parts) {
+      if (p.def.type !== 'engine' || !p.active) continue;
+      const e = p.def.engine;
+      const solid = e.solid;
+      const fuel = solid ? p.fuel > 0 : v.fuelIn(p.comp).cur > 0;
+      if (fuel) T += e.thrust;
+    }
+    if (T <= 0) return null;
+    return (dv * v.mass) / T;
+  }
+
+  F.paintXfer = function () {
+    const panel = document.getElementById('xferPanel');
+    const tip = document.getElementById('mapTip');
+    if (!panel) return;
+    if (tip) tip.classList.toggle('hidden', !S.render.cam.map || !!F.target);
+    if (!F.target) { panel.classList.add('hidden'); return; }
+    panel.classList.remove('hidden');
+    document.getElementById('xTitle').textContent = 'TRANSFER → ' + F.target.name.toUpperCase();
+
+    const body = document.getElementById('xBody');
+    const p = F.plan;
+    if (!p || !p.ok) {
+      body.innerHTML = '<div class="why">' + ((p && p.reason) || 'No route found.') + '</div>';
+      return;
+    }
+    const left = p.tBurn - F.t;
+    const row = (k, v2) => '<div class="r"><span>' + k + '</span><b>' + v2 + '</b></div>';
+    const secs = burnSeconds(F.focus, p.dv);
+    const impact = p.intercept && p.periapsis <= 0;
+    let h = row('Burn in', left > 0 ? U.time(left) : 'now')
+      + row('Δv needed', U.speed(p.dv))
+      + (secs != null ? row('Burn for', secs.toFixed(1) + ' s') : '')
+      + row('Travel time', U.time(p.travel))
+      + row(p.intercept ? 'Arrival alt' : 'Miss by',
+        impact ? 'impact' : U.dist(Math.max(0, p.periapsis)));
+    if (left > 0) {
+      h += '<div class="go">Point <b>Prograde</b>, wait for zero</div>';
+    } else if (left > -Math.max(20, (secs || 20) * 1.5)) {
+      h += '<div class="go hot">BURN NOW — prograde</div>';
+    } else {
+      h += '<div class="go">Window passed — recalculate</div>';
+    }
+    if (!p.intercept) {
+      h += '<div class="note">This path misses ' + F.target.name +
+        '. Burn anyway, then recalculate for a correction.</div>';
+    } else if (impact) {
+      h += '<div class="note">You will arrive on a collision course — burn ' +
+        'retrograde on the way in to slow down and land.</div>';
+    }
+    body.innerHTML = h;
+  };
 
   /* ═══════════════════ prediction ═══════════════════ */
 

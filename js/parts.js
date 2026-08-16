@@ -491,8 +491,8 @@
   add({
     id: 'srb', name: 'Solid Booster', cat: 'Engines', type: 'engine',
     w: 2, h: 9, mass: 900, fuel: 11000, radial: true, cd: 1.0,
-    engine: { thrust: 380e3, ispVac: 240, ispSl: 210, gimbal: 0, solid: true },
-    desc: 'Burns its own fuel flat-out until empty. Cannot be shut down.',
+    engine: { thrust: 380e3, ispVac: 240, ispSl: 210, gimbal: 0, solid: true, smoke: 6 },
+    desc: 'Burns its own fuel flat-out until empty. Cannot be shut down, and throws out a colossal cloud of smoke.',
     draw: drawSrb
   });
 

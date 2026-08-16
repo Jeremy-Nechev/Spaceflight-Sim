@@ -93,17 +93,39 @@
    */
   V.STAGE_TOL = 0.35;
 
+  // Within one height band, engines light before anything is thrown away, and
+  // parachutes come last.
+  const KIND_RANK = { engine: 0, sep: 1, chute: 2 };
+
   V.autoStages = function (parts) {
     const act = parts.filter(p => V.isStageable(p.def))
-      .map(p => ({ uid: p.uid, y: p.ly - p.def.h / 2 }))
-      .sort((a, b) => a.y - b.y);
+      .map(p => ({ uid: p.uid, y: p.ly - p.def.h / 2, kind: p.def.type }))
+      .sort((a, b) => (a.y - b.y) || (KIND_RANK[a.kind] - KIND_RANK[b.kind]));
     const out = [];
-    let cur = null, curY = -1e9;
+    let cur = null, curY = -1e9, curKind = null;
     for (const a of act) {
-      if (!cur || a.y - curY > V.STAGE_TOL) { cur = []; out.push(cur); curY = a.y; }
+      // A group only ever holds one kind of part. Igniting an engine and
+      // jettisoning a booster are separate events even at the same height,
+      // and mixing them means one press does both.
+      if (!cur || a.y - curY > V.STAGE_TOL || a.kind !== curKind) {
+        cur = []; out.push(cur); curY = a.y; curKind = a.kind;
+      }
       cur.push(a.uid);
     }
     return out;
+  };
+
+  /** the height band and kind a group represents, for slotting new parts in */
+  V.groupKey = function (vesselParts, group) {
+    let y = Infinity, kind = null;
+    for (const uid of group) {
+      const p = vesselParts.find(z => z.uid === uid);
+      if (!p) continue;
+      const b = p.ly - p.def.h / 2;
+      if (b < y) y = b;
+      if (kind == null) kind = p.def.type;
+    }
+    return { y, kind };
   };
 
   Vessel.prototype.stageOf = function (uid) {

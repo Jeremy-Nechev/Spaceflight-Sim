@@ -71,7 +71,8 @@
       F.update(dt, dt);
       R.follow(F.focus, F.t, dt);
       R.frame(ctx, cw, ch, dpr, {
-        t: F.t, vessels: F.vessels, focus: F.focus, path: F.path, el: F.el
+        t: F.t, vessels: F.vessels, focus: F.focus, path: F.path, el: F.el,
+        plan: F.plan, targetBody: F.target
       });
     } else {
       B.draw(ctx, cw, ch, dpr);
@@ -332,6 +333,8 @@
     U.$$('#sasBox button').forEach(b => { b.onclick = () => F.setSas(b.dataset.sas); });
 
     document.getElementById('btnStage').onclick = () => F.stage();
+    document.getElementById('xClose').onclick = () => F.setTarget(null);
+    document.getElementById('xRecalc').onclick = () => F.replan();
     document.getElementById('endRevert').onclick = () => F.revert();
     document.getElementById('endBuild').onclick = () => { F.hideEnd(); setScene('build'); };
 
@@ -372,8 +375,11 @@
       R.cam.offX = 0; R.cam.offY = 0;
       const v = F.focus;
       const r = v ? Math.max(4e5, Math.hypot(v.x, v.y) * 1.6) : 1e6;
-      R.cam.mapZoomT = R.cam.mapZoom = 0.42 * Math.min(cw, ch) / r;
+      const scr = Math.max(320, Math.min(cw, ch));   // never 0 before first resize
+      R.cam.mapZoomT = R.cam.mapZoom =
+        U.clamp(0.42 * scr / r, R.cam.mapMin, R.cam.mapMax);
     }
+    F.paintXfer();
   }
 
   /* ═══════════════════ menu ═══════════════════ */
@@ -440,6 +446,14 @@
       pointers.delete(e.pointerId);
       if (pointers.size < 2) pinchD = 0;
       if (scene === 'build') B.pointerUp();
+      // a click (not a drag) on a world in map view plans a transfer to it
+      if (scene === 'flight' && mapDrag && e.button !== 2) {
+        const moved = Math.hypot(e.clientX - mapDrag.x, e.clientY - mapDrag.y);
+        if (moved < 5) {
+          const b = R.pickBody(e.clientX, e.clientY, cw, ch, F.t);
+          if (b) { F.setTarget(b); if (S.audio) S.audio.ui(); }
+        }
+      }
       mapDrag = null;
     };
     canvas.addEventListener('pointerup', up);

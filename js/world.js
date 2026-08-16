@@ -32,7 +32,7 @@
       water: '#1f6fa8', waterDeep: '#0d3559', surf: '#a8dcf0',
       sky: '#5aa6e8', skyHi: '#1a4f8f', glow: '#79b8f0'
     },
-    scenery: { density: 0.72, chunkM: 380, kinds: 'earth' },
+    scenery: { density: 0.85, chunkM: 240, slots: 5, kinds: 'earth' },
     clouds: { chunkM: 3000, density: 0.55, loAlt: 700, hiAlt: 9000 },
     orbit: null
   };
@@ -54,7 +54,7 @@
       water: '#000', waterDeep: '#000', surf: '#000',
       sky: '#000', skyHi: '#000', glow: '#8899aa'
     },
-    scenery: { density: 0.5, chunkM: 520, kinds: 'moon' },
+    scenery: { density: 0.6, chunkM: 380, slots: 4, kinds: 'moon' },
     clouds: null,
     orbit: { parent: 'earth', a: 4.0e6, phase0: -0.6 }
   };
@@ -108,19 +108,31 @@
     return h;
   }
 
-  function detailOf(b, th) {
+  /**
+   * Fine detail, optionally band-limited. `lim` is the highest harmonic the
+   * caller can actually resolve; anything near or above it is faded out so a
+   * zoomed-out coastline stays smooth instead of aliasing into jitter.
+   */
+  function detailOf(b, th, lim) {
     const o = th - b.contOrigin;
     let h = 0;
     for (let i = 0; i < b.detail.length; i++) {
       const c = b.detail[i];
-      h += c[0] * Math.sin(c[1] * o + c[2]);
+      const w = lim ? U.clamp(1 - (c[1] / lim - 0.6) / 0.4, 0, 1) : 1;
+      if (w > 0) h += c[0] * w * Math.sin(c[1] * o + c[2]);
     }
     return h;
   }
 
-  /** distance of the planet's surface from its centre, at polar angle th */
-  const terrain = W.terrain = function (b, th) {
-    let h = b.radius + continents(b, th) + detailOf(b, th);
+  /**
+   * Distance of the planet's surface from its centre at polar angle th.
+   * `dth` is the angular spacing the caller is sampling at — pass it when
+   * drawing so detail can be band-limited; omit it (physics, collision) to get
+   * the true, full-detail surface.
+   */
+  const terrain = W.terrain = function (b, th, dth) {
+    const lim = dth > 0 ? Math.PI / (dth * 3) : 0;
+    let h = b.radius + continents(b, th) + detailOf(b, th, lim);
     if (b.pad) {
       // blend to a dead-flat plateau at the launch site
       const d = U.wrap(th - b.pad.theta) / b.pad.width;
@@ -306,16 +318,158 @@
     return { pts, ref, refNow, hit, closed, escape, span: t - t0 };
   };
 
+  /* ═══════════════════ transfer planning ═══════════════════ */
+
+  /** Integrate a point mass forward by `span` seconds. */
+  function propagate(x, y, vx, vy, t0, span) {
+    let t = t0;
+    const g = { x: 0, y: 0 };
+    W.gravity(x, y, t, g);
+    let ax = g.x, ay = g.y;
+    for (let i = 0; i < 24000 && t < t0 + span; i++) {
+      const b = W.soiBody(x, y, t), bp = W.bodyPos(b, t);
+      const rr = Math.hypot(x - bp.x, y - bp.y);
+      let dt = U.clamp(U.TAU * Math.sqrt((rr * rr * rr) / b.mu) / 200, 0.5, 900);
+      if (t + dt > t0 + span) dt = t0 + span - t;
+      if (dt <= 1e-9) break;
+      const nx = x + vx * dt + 0.5 * ax * dt * dt;
+      const ny = y + vy * dt + 0.5 * ay * dt * dt;
+      t += dt;
+      W.gravity(nx, ny, t, g);
+      vx += 0.5 * (ax + g.x) * dt; vy += 0.5 * (ay + g.y) * dt;
+      x = nx; y = ny; ax = g.x; ay = g.y;
+    }
+    return { x, y, vx, vy, t };
+  }
+  W.propagate = propagate;
+
+  /** Fly forward and record how close we get to `target`. */
+  function flyToward(x, y, vx, vy, t0, target, span, collect) {
+    let t = t0, best = Infinity, bestT = t0, hit = false;
+    const g = { x: 0, y: 0 };
+    W.gravity(x, y, t, g);
+    let ax = g.x, ay = g.y;
+    const pts = collect ? [] : null;
+    for (let i = 0; i < 2600 && t < t0 + span; i++) {
+      const b = W.soiBody(x, y, t), bp = W.bodyPos(b, t);
+      const rr = Math.hypot(x - bp.x, y - bp.y);
+      const dt = U.clamp(U.TAU * Math.sqrt((rr * rr * rr) / b.mu) / 190, 0.5, 900);
+      const nx = x + vx * dt + 0.5 * ax * dt * dt;
+      const ny = y + vy * dt + 0.5 * ay * dt * dt;
+      t += dt;
+      W.gravity(nx, ny, t, g);
+      vx += 0.5 * (ax + g.x) * dt; vy += 0.5 * (ay + g.y) * dt;
+      x = nx; y = ny; ax = g.x; ay = g.y;
+      if (collect) pts.push(x, y);
+      const tp = W.bodyPos(target, t);
+      const d = Math.hypot(x - tp.x, y - tp.y);
+      if (d < best) { best = d; bestT = t; }
+      if (d < target.radius) { hit = true; break; }
+      // fell back into the parent
+      const pr = Math.hypot(x, y);
+      if (pr < W.earth.radius) break;
+    }
+    return { miss: best, tArrive: bestT, pts, hit };
+  }
+
+  /**
+   * Work out when and how hard to burn to reach `target` from the craft's
+   * current orbit.
+   *
+   * A Hohmann transfer gives the seed — the burn size that raises apoapsis to
+   * the target's orbit, and the phase angle the target must be at so it arrives
+   * at the same place we do. Because the real integration includes the target's
+   * own gravity (and the orbit is rarely perfectly circular), the seed is then
+   * refined numerically against actual closest approach.
+   */
+  W.planTransfer = function (v, target, t) {
+    if (!target || !target.orbit) return { ok: false, reason: 'That world has no orbit to aim at.' };
+    const parent = W.byId[target.orbit.parent];
+    const soi = W.soiBody(v.x, v.y, t);
+    if (soi === target) return { ok: false, reason: 'You are already at ' + target.name + '.' };
+    if (soi !== parent) return { ok: false, reason: 'Escape ' + soi.name + ' first.' };
+
+    const el = W.elements(parent, v.x, v.y, v.vx, v.vy, t);
+    if (el.e >= 1) return { ok: false, reason: 'You are already on an escape path — circularise first.' };
+    if (el.pe < parent.radius + 20000) return { ok: false, reason: 'Get into a stable orbit first.' };
+
+    const mu = parent.mu;
+    const r1 = el.a, r2 = target.orbit.a;
+    const at = (r1 + r2) / 2;
+    const tTrans = Math.PI * Math.sqrt((at * at * at) / mu);
+    const nT = target.orbit.n;
+    const nC = Math.sqrt(mu / (r1 * r1 * r1));
+    if (Math.abs(nC - nT) < 1e-12) return { ok: false, reason: 'No transfer window exists.' };
+
+    // where the target must sit, relative to us, at the moment we burn
+    const pp = W.bodyPos(parent, t), tp = W.bodyPos(target, t);
+    const thC = Math.atan2(v.y - pp.y, v.x - pp.x);
+    const thT = Math.atan2(tp.y - pp.y, tp.x - pp.x);
+    const phiReq = U.wrap(Math.PI - nT * tTrans);
+    const syn = U.TAU / Math.abs(nC - nT);
+    let wait = U.wrap(phiReq - U.wrap(thT - thC)) / (nC - nT);
+    while (wait < 0) wait += syn;
+
+    const vNow = Math.sqrt(mu * (2 / el.r - 1 / el.a));
+    const dv0 = Math.sqrt(mu * (2 / el.r - 1 / at)) - vNow;
+    const period = el.period;
+    const span = tTrans * 2.2;
+
+    // ── refine: propagate once per candidate burn time, then try burn sizes ──
+    let best = null;
+    const search = (centreT, tSpread, dvCentre, dvSpread, nT_, nD) => {
+      for (let i = 0; i < nT_; i++) {
+        const tB = centreT + tSpread * (nT_ === 1 ? 0 : (i / (nT_ - 1) - 0.5) * 2);
+        if (tB < t) continue;
+        const st = propagate(v.x, v.y, v.vx, v.vy, t, tB - t);
+        const sp = Math.hypot(st.vx, st.vy) || 1;
+        const ux = st.vx / sp, uy = st.vy / sp;
+        for (let k = 0; k < nD; k++) {
+          const dv = dvCentre + dvSpread * (nD === 1 ? 0 : (k / (nD - 1) - 0.5) * 2);
+          if (dv <= 0) continue;
+          const r = flyToward(st.x, st.y, st.vx + ux * dv, st.vy + uy * dv, tB, target, span, false);
+          if (!best || r.miss < best.miss) {
+            best = { miss: r.miss, dv, tBurn: tB, tArrive: r.tArrive, hit: r.hit, st, ux, uy };
+          }
+        }
+      }
+    };
+
+    // coarse sweep around the analytic guess, then tighten twice
+    search(t + wait, period * 0.35, dv0, dv0 * 0.18, 11, 9);
+    if (best) search(best.tBurn, period * 0.07, best.dv, best.dv * 0.05, 7, 7);
+    if (best) search(best.tBurn, period * 0.015, best.dv, best.dv * 0.012, 5, 5);
+    if (!best) return { ok: false, reason: 'Could not find a transfer from this orbit.' };
+
+    // final pass, keeping the path for the map
+    const shot = flyToward(best.st.x, best.st.y,
+      best.st.vx + best.ux * best.dv, best.st.vy + best.uy * best.dv,
+      best.tBurn, target, span, true);
+
+    return {
+      ok: true, target, parent,
+      dv: best.dv,
+      tBurn: best.tBurn,
+      wait: best.tBurn - t,
+      travel: best.tArrive - best.tBurn,
+      miss: shot.miss,
+      periapsis: shot.miss - target.radius,
+      intercept: shot.miss < target.soi,
+      burnX: best.st.x, burnY: best.st.y,
+      pts: shot.pts
+    };
+  };
+
   /* ═══════════════════ ground scenery ═══════════════════ */
 
   const KINDS = {
     earth: [
-      { t: 'pine', wgt: 30, w: [4, 7], h: [9, 17] },
-      { t: 'tree', wgt: 26, w: [7, 12], h: [8, 13] },
-      { t: 'house', wgt: 22, w: [8, 14], h: [6, 10] },
-      { t: 'block', wgt: 9, w: [12, 18], h: [15, 27] },
-      { t: 'mast', wgt: 5, w: [3, 4], h: [24, 40] },
-      { t: 'rock', wgt: 8, w: [3, 6], h: [2, 4] }
+      { t: 'pine', wgt: 34, w: [4, 7], h: [9, 17] },
+      { t: 'tree', wgt: 30, w: [7, 12], h: [8, 13] },
+      { t: 'house', wgt: 26, w: [8, 14], h: [6, 10] },
+      { t: 'block', wgt: 7, w: [12, 18], h: [15, 27] },
+      { t: 'mast', wgt: 3, w: [3, 4], h: [24, 40] },
+      { t: 'rock', wgt: 5, w: [3, 6], h: [2, 4] }
     ],
     moon: [
       { t: 'rock', wgt: 62, w: [3, 9], h: [2, 6] },
@@ -338,7 +492,7 @@
     if (arr) return arr;
     arr = [];
     const ca = b.chunkAng, list = KINDS[b.scenery.kinds];
-    const slots = 3;
+    const slots = b.scenery.slots || 3;
     for (let k = 0; k < slots; k++) {
       if (U.hash(b.seed, ci, k * 11 + 1) > b.scenery.density) continue;
       const jitter = (U.hash(b.seed, ci, k * 11 + 2) - 0.5) * 0.7;
