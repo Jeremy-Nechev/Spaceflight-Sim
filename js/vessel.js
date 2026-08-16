@@ -347,23 +347,37 @@
 
   /** Δv left in the stage that is burning (or about to burn) */
   Vessel.prototype.stageDv = function () {
-    let comp = -1, isp = 0, n = 0;
-    const scan = p => {
-      if (p.def.type !== 'engine' || p.def.engine.solid) return;
-      comp = p.comp; isp += p.def.engine.ispVac; n++;
-    };
-    for (const p of this.parts) if (p.active) scan(p);
-    if (!n && this.stageIdx < this.stages.length) {
-      for (const uid of this.stages[this.stageIdx]) {
-        const p = this.byUid(uid);
-        if (p) scan(p);
-      }
+    let list = this.parts.filter(p => p.def.type === 'engine' && p.active);
+    if (!list.length && this.stageIdx < this.stages.length) {
+      list = this.stages[this.stageIdx]
+        .map(uid => this.byUid(uid))
+        .filter(p => p && p.def.type === 'engine');
     }
-    if (!n) return 0;
-    isp /= n;
-    const f = this.fuelIn(comp).cur;
-    if (f <= 0) return 0;
-    return isp * U.G0 * Math.log(this.mass / Math.max(1, this.mass - f));
+    if (!list.length) return 0;
+
+    // Sum every propellant source this stage actually draws on — solids by
+    // their own part, liquids once per compartment — and weight Isp by
+    // thrust. Using only a single engine's tank here (as this used to) while
+    // `this.mass` also falls as a *different* engine (e.g. a solid booster
+    // burning alongside a liquid sustainer) burns its own separate fuel made
+    // the ratio grow even though nothing was being added back — Δv would
+    // visibly climb while the untracked engine burned down.
+    let fuel = 0, thrust = 0, flow = 0;
+    const seenComp = new Set();
+    for (const p of list) {
+      const e = p.def.engine;
+      if (e.solid) {
+        fuel += p.def.fuel * p.fuel;
+      } else if (!seenComp.has(p.comp)) {
+        seenComp.add(p.comp);
+        fuel += this.fuelIn(p.comp).cur;
+      }
+      thrust += e.thrust;
+      flow += e.thrust / (e.ispVac * U.G0);
+    }
+    if (fuel <= 0 || flow <= 0) return 0;
+    const isp = thrust / (flow * U.G0);
+    return isp * U.G0 * Math.log(this.mass / Math.max(1, this.mass - fuel));
   };
 
   /** world-space corners of every part — used for terrain and scenery contact */

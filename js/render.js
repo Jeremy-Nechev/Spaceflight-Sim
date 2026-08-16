@@ -716,7 +716,7 @@
 
   FX.clear = function () { parts.length = 0; };
 
-  FX.exhaust = function (v, p, T, atmoF, dt) {
+  FX.exhaust = function (v, p, T, atmoF, dt, groundAlt) {
     if (p.throttle < 0.1) return;
     // solid motors carry their own oxidiser and belch aluminium-oxide smoke,
     // so they keep smoking thickly even where the air is thin
@@ -739,21 +739,35 @@
     const spread = w * (thick ? 1.7 : 0.8);
     const scatter = thick ? 32 : 14;
 
+    // On the pad the plume has nowhere to go but sideways. Left alone, every
+    // puff follows the same exhaust jet down into the same patch of ground
+    // and piles into one clump under the rocket — real ground-hugging exhaust
+    // fans out into a broad, low cloud instead. Fade this out by ~150 m so
+    // ordinary ascent/in-flight smoke is untouched.
+    const ground = groundAlt == null ? 0 : U.clamp(1 - groundAlt / 150, 0, 1);
+
     for (let i = 0; i < count; i++) {
       const jx = (Math.random() - 0.5) * spread, jy = (Math.random() - 0.5) * spread;
       // stagger along the exhaust so a burst doesn't land as one clump
       const back = p.def.h * 0.6 + Math.random() * w * 1.2;
+      // each puff picks its own outward direction to roll away across the
+      // pad, rather than all of them riding the jet straight down together
+      const fanA = Math.random() * U.TAU;
+      const fan = ground * (16 + 46 * Math.random());
       push({
         x: _pw.x - n.x * back + jx, y: _pw.y - n.y * back + jy,
-        vx: v.vx - n.x * sp + (Math.random() - 0.5) * scatter,
-        vy: v.vy - n.y * sp + (Math.random() - 0.5) * scatter,
+        vx: v.vx - n.x * sp + (Math.random() - 0.5) * scatter + Math.cos(fanA) * fan,
+        vy: v.vy - n.y * sp + (Math.random() - 0.5) * scatter + Math.sin(fanA) * fan,
         // billows for about a minute, still slowly swelling the whole time,
         // before it's finally cleared
         life: 0, max: 54 + Math.random() * 12,
         r0: w * (thick ? 1.1 : 0.6), r1: w * (2.8 + 3.4 * dens) * (thick ? 2.6 : 1.15),
         col: thick ? [246, 244, 240] : [235, 235, 240],
-        a0: (thick ? 0.34 : 0.30) * dens, drag: 0.85, grav: 0,
-        gdrag: 0.94, bounce: 0
+        a0: (thick ? 0.34 : 0.30) * dens,
+        // near the ground the fan-out needs to survive long enough to actually
+        // spread the puffs apart before friction settles them
+        drag: U.lerp(0.85, 0.5, ground), grav: 0,
+        gdrag: U.lerp(0.94, 0.985, ground), bounce: 0
       });
     }
   };

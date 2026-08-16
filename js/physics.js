@@ -203,6 +203,8 @@
 
     /* ── where are we ── */
     const near = nearestBody(v.x, v.y, t);
+    const gi = W.groundInfo(near, v.x, v.y, t);      // used by the ground-contact
+    // section below too — nothing moves between here and there, so one query does
     const altASL = W.altitudeASL(W.earth, v.x, v.y, t);
     const rho = W.density(W.earth, altASL);
     const atmoF = rho / W.earth.atmo.rho0;
@@ -272,7 +274,7 @@
       Fx += fx; Fy += fy;
       Tq += rx * fy - ry * fx;
 
-      if (S.fx) S.fx.exhaust(v, p, T, atmoF, dt);
+      if (S.fx) S.fx.exhaust(v, p, T, atmoF, dt, gi.alt);
     }
     v.liveThrust = liveThrust;
 
@@ -338,7 +340,6 @@
     } else v.inWater = false;
 
     /* ── ground + scenery ── */
-    const gi = W.groundInfo(near, v.x, v.y, t);
     let contacts = 0;
     if (gi.alt < v.radius() + 60) {
       const res = groundForces(v, near, t, dt, m);
