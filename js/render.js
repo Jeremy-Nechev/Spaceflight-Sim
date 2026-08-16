@@ -645,10 +645,15 @@
 
   const FX = S.fx = {};
   const parts = [];
-  const MAXP = 700;
+  const MAXP = 1200;
   FX.onNote = null;
 
-  function push(o) { if (parts.length < MAXP) parts.push(o); }
+  function push(o) {
+    if (parts.length >= MAXP) return;
+    if (o.bounce == null) o.bounce = 0;      // how much it rebounds off the ground
+    if (o.gdrag == null) o.gdrag = 0.90;     // how fast it slows once it's down
+    parts.push(o);
+  }
 
   FX.note = function (msg, kind) { if (FX.onNote) FX.onNote(msg, kind); };
 
@@ -656,7 +661,7 @@
 
   FX.exhaust = function (v, p, T, atmoF, dt) {
     if (atmoF < 0.06 || p.throttle < 0.1) return;
-    if (Math.random() > dt * 40 * p.throttle) return;
+    if (Math.random() > dt * 45 * p.throttle) return;
     v.worldOf(p, _pw);
     const n = v.noseDir();
     const w = p.def.w;
@@ -666,9 +671,10 @@
       x: _pw.x - n.x * p.def.h * 0.6 + jx, y: _pw.y - n.y * p.def.h * 0.6 + jy,
       vx: v.vx - n.x * sp + (Math.random() - 0.5) * 14,
       vy: v.vy - n.y * sp + (Math.random() - 0.5) * 14,
-      life: 0, max: 1.1 + Math.random() * 1.4,
-      r0: w * 0.45, r1: w * (2.4 + 3 * atmoF),
-      col: [235, 235, 240], a0: 0.42 * atmoF, drag: 1.7, grav: 0
+      life: 0, max: 5.0 + Math.random() * 5.5,
+      r0: w * 0.45, r1: w * (2.8 + 3.4 * atmoF),
+      col: [235, 235, 240], a0: 0.26 * atmoF, drag: 0.85, grav: 0,
+      gdrag: 0.93, bounce: 0
     });
   };
 
@@ -685,8 +691,9 @@
         x: v.x, y: v.y,
         vx: v.vx * 0.2 + dx * s * Math.cos(a) + (nx / l) * s * 0.5,
         vy: v.vy * 0.2 + dy * s * Math.cos(a) + (ny / l) * s * 0.5,
-        life: 0, max: 0.9 + Math.random(), r0: 0.4, r1: 4 + Math.random() * 5,
-        col: [190, 180, 160], a0: 0.5, drag: 1.4, grav: 0.35
+        life: 0, max: 2.6 + Math.random() * 2.2, r0: 0.4, r1: 5 + Math.random() * 6,
+        col: [190, 180, 160], a0: 0.5, drag: 1.1, grav: 0.35,
+        gdrag: 0.88, bounce: 0.08
       });
     }
   };
@@ -697,8 +704,9 @@
       const a = Math.random() * U.TAU, s = 3 + Math.random() * speed * 0.7;
       push({
         x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
-        life: 0, max: 0.7 + Math.random() * 0.9, r0: 0.3, r1: 1.6,
-        col: [210, 240, 255], a0: 0.85, drag: 0.9, grav: 1
+        life: 0, max: 1.4 + Math.random() * 1.4, r0: 0.3, r1: 1.9,
+        col: [210, 240, 255], a0: 0.85, drag: 0.9, grav: 1,
+        gdrag: 0.6, bounce: 0.25
       });
     }
   };
@@ -713,9 +721,10 @@
       push({
         x: x + (Math.random() - 0.5) * o.w, y: y + (Math.random() - 0.5) * o.h,
         vx: Math.cos(a) * s, vy: Math.sin(a) * s,
-        life: 0, max: 1.2 + Math.random() * 1.6,
+        life: 0, max: 2.6 + Math.random() * 2.4,
         r0: o.w * 0.09, r1: o.w * 0.16,
-        col, a0: 0.95, drag: 0.35, grav: 1
+        col, a0: 0.95, drag: 0.35, grav: 1,
+        gdrag: 0.55, bounce: 0.32
       });
     }
   };
@@ -728,10 +737,11 @@
       push({
         x: v.x + (Math.random() - 0.5) * R0, y: v.y + (Math.random() - 0.5) * R0,
         vx: v.vx * 0.5 + Math.cos(a) * s, vy: v.vy * 0.5 + Math.sin(a) * s,
-        life: 0, max: hot ? 0.5 + Math.random() * 0.7 : 1.6 + Math.random() * 1.8,
-        r0: R0 * 0.12, r1: R0 * (hot ? 0.6 : 1.3),
+        life: 0, max: hot ? 0.6 + Math.random() * 0.8 : 4.5 + Math.random() * 4.5,
+        r0: R0 * 0.12, r1: R0 * (hot ? 0.6 : 1.9),
         col: hot ? [255, 190, 90] : [70, 70, 74],
-        a0: hot ? 1 : 0.7, drag: 0.8, grav: hot ? 0 : 0.6
+        a0: hot ? 1 : 0.7, drag: 0.8, grav: hot ? 0 : 0.6,
+        gdrag: 0.9, bounce: 0
       });
     }
     if (S.audio) S.audio.boom(1.2);
@@ -748,8 +758,17 @@
     }
   };
 
-  FX.update = function (dt, t) {
+  /**
+   * Advance particles. `body` is the world whose surface they can land on —
+   * smoke, dust and debris pile up on the ground (or the sea) instead of
+   * sinking through it.
+   */
+  FX.update = function (dt, t, body) {
     const g = { x: 0, y: 0 };
+    const bp = body ? W.bodyPos(body, t) : null;
+    // only bother with terrain for particles actually near the surface
+    const nearR = body ? body.radius + 5000 : 0;
+
     for (let i = parts.length - 1; i >= 0; i--) {
       const p = parts[i];
       p.life += dt;
@@ -762,6 +781,40 @@
       const d = Math.exp(-p.drag * dt);
       p.vx *= d; p.vy *= d;
       p.x += p.vx * dt; p.y += p.vy * dt;
+
+      if (!bp) continue;
+      const dx = p.x - bp.x, dy = p.y - bp.y;
+      const r = Math.hypot(dx, dy);
+      if (r > nearR || r < 1) continue;
+      const th = Math.atan2(dy, dx);
+      let gr = W.terrain(body, th);
+      if (body.sea && gr < body.seaLevel) gr = body.seaLevel;   // rest on the water
+      // sit the puff *on* the surface, not centred in it — and keep doing so as
+      // it swells, otherwise a growing cloud sinks back into the ground
+      const curR = U.lerp(p.r0, p.r1, p.life / p.max);
+      const rest = gr + curR * 0.55;
+      if (r >= rest) continue;
+
+      const nx = dx / r, ny = dy / r;
+      p.x = bp.x + nx * rest;
+      p.y = bp.y + ny * rest;
+      const vn = p.vx * nx + p.vy * ny;
+      if (vn < 0) {
+        // kill the into-ground component, keep a little rebound
+        p.vx -= vn * nx * (1 + p.bounce);
+        p.vy -= vn * ny * (1 + p.bounce);
+      }
+      if (!p.hitGround) {
+        // first touch: throw it sideways so the plume rolls out across the pad
+        // instead of every puff stacking up on the same spot
+        p.hitGround = true;
+        const side = Math.random() < 0.5 ? 1 : -1;
+        const kick = (5 + Math.random() * 20) * side;
+        p.vx += -ny * kick; p.vy += nx * kick;
+      }
+      // scrub off sideways speed so it settles and spreads out
+      const k = Math.pow(p.gdrag, dt * 60);
+      p.vx *= k; p.vy *= k;
     }
   };
 
@@ -890,6 +943,76 @@
     void label;
   }
 
+  /**
+   * Prograde marker: an arrow parked partway out from the centre pointing the
+   * way the craft is actually travelling, with the speed printed above it.
+   * Speed is relative to the body below, matching the HUD readout.
+   */
+  function drawVelocityMarker(ctx, cw, ch, dpr, G) {
+    const v = G.focus;
+    if (!v) return;
+    const b = v.nearBody || W.earth;
+    const bv = W.bodyVel(b, G.t);
+    const rvx = v.vx - bv.x, rvy = v.vy - bv.y;
+    const spd = Math.hypot(rvx, rvy);
+    if (spd < 1.5) return;
+
+    // world direction → screen direction through the camera rotation
+    const c = Math.cos(cam.rot), s = Math.sin(cam.rot);
+    let sx = c * rvx - s * rvy;
+    let sy = -(s * rvx + c * rvy);
+    const l = Math.hypot(sx, sy) || 1;
+    sx /= l; sy /= l;
+
+    const rad = Math.min(cw, ch) * 0.30;      // well inside the screen edge
+    const px = cw / 2 + sx * rad, py = ch / 2 + sy * rad;
+    const ang = Math.atan2(sy, sx);
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // arrow
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(ang);
+    ctx.beginPath();
+    ctx.moveTo(15, 0);
+    ctx.lineTo(-7, -9);
+    ctx.lineTo(-3, 0);
+    ctx.lineTo(-7, 9);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(140,225,180,.95)';
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = 'rgba(10,20,16,.75)';
+    ctx.stroke();
+    // tail, pointing back at the craft
+    ctx.beginPath();
+    ctx.moveTo(-9, 0);
+    ctx.lineTo(-24, 0);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(140,225,180,.45)';
+    ctx.stroke();
+    ctx.restore();
+
+    // speed label, always upright and above the arrow
+    const txt = U.speed(spd);
+    ctx.font = '600 13px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(txt).width;
+    const ty = py - 22;
+    ctx.fillStyle = 'rgba(8,14,22,.82)';
+    U.roundRect(ctx, px - tw / 2 - 7, ty - 10, tw + 14, 20, 10);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(140,225,180,.5)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = '#d6f7e4';
+    ctx.fillText(txt, px, ty);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+  }
+
   function markX(ctx, x, y, s, col) {
     ctx.strokeStyle = col;
     ctx.lineWidth = s * 0.22;
@@ -921,6 +1044,7 @@
     FX.draw(ctx, cam.zoom);
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawVelocityMarker(ctx, cw, ch, dpr, G);
   };
 
 })(window.SFS);

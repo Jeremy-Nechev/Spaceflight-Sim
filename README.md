@@ -84,6 +84,20 @@ and reaction wheels, buoyancy, terrain contact with friction, and numerically
 integrated trajectory prediction drawn on the map with apoapsis and periapsis
 markers.
 
+**Autopilot.** The bar across the top of the flight screen points the nose for
+you so you can concentrate on the throttle: hold the current heading, follow
+prograde or retrograde, or aim straight away from the world below. The selected
+mode is described in plain English underneath it.
+
+**Hulls collide.** Separated stages are solid objects, not ghosts. A gentle
+nudge bounces them apart; leave an engine burning under a stage you have just
+dropped and it will chase you down and take both craft out. Exhaust smoke,
+dust and debris pile up on the ground — or the sea — instead of sinking
+through it.
+
+**Velocity marker.** A green arrow sits out from the centre of the screen
+pointing the way you are actually travelling, with your speed printed above it.
+
 ### Stock rockets
 
 | Rocket | Notes |

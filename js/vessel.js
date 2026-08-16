@@ -48,6 +48,7 @@
     this.mass = 1; this.inertia = 1;
     this.landed = false; this.dead = false;
     this.debris = false;
+    this.noHitUntil = 0;      // grace period so freshly split pieces don't self-collide
     this.sas = 'off'; this.sasTarget = 0;
     this.steer = 0;
     this._dirty = true;

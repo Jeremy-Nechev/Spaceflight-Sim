@@ -77,7 +77,117 @@
       const v = vessels[i];
       if (!v.dead) stepVessel(v, dt, t);
     }
+    collideVessels(vessels, t);
   };
+
+  /* ═══════════════════ hull-to-hull collision ═══════════════════ */
+
+  const _cpA = [], _cpB = [], _hitList = [];
+  const _hit = { nx: 0, ny: 0, depth: 0 };
+  const RESTITUTION = 0.18;
+
+  /** Is this world point inside any part of v? If so, report the shallowest way out. */
+  function pointInside(v, wx, wy, out) {
+    const ca = Math.cos(v.angle), sa = Math.sin(v.angle);
+    const dx = wx - v.x, dy = wy - v.y;
+    // world → vessel local (inverse rotation), then back into part coordinates
+    const lx = dx * ca + dy * sa + v.com.x;
+    const ly = -dx * sa + dy * ca + v.com.y;
+    for (let i = 0; i < v.parts.length; i++) {
+      const p = v.parts[i];
+      const hw = p.def.w / 2, hh = p.def.h / 2;
+      const ex = lx - p.lx, ey = ly - p.ly;
+      if (Math.abs(ex) >= hw || Math.abs(ey) >= hh) continue;
+      const outX = hw - Math.abs(ex), outY = hh - Math.abs(ey);
+      let nlx = 0, nly = 0;
+      if (outX < outY) { nlx = ex < 0 ? -1 : 1; out.depth = outX; }
+      else { nly = ey < 0 ? -1 : 1; out.depth = outY; }
+      out.nx = nlx * ca - nly * sa;          // local normal back into world space
+      out.ny = nlx * sa + nly * ca;
+      return true;
+    }
+    return false;
+  }
+
+  function collideVessels(vessels, t) {
+    for (let i = 0; i < vessels.length; i++) {
+      const a = vessels[i];
+      if (a.dead || a.crash || t < a.noHitUntil) continue;
+      for (let j = i + 1; j < vessels.length; j++) {
+        const b = vessels[j];
+        if (b.dead || b.crash || t < b.noHitUntil) continue;
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const rr = a.radius() + b.radius();
+        if (dx * dx + dy * dy > rr * rr) continue;      // broad phase
+        resolvePair(a, b);
+      }
+    }
+  }
+
+  function resolvePair(a, b) {
+    _hitList.length = 0;
+    a.contactPoints(_cpA);
+    for (let i = 0; i < _cpA.length && _hitList.length < 40; i += 2) {
+      if (pointInside(b, _cpA[i], _cpA[i + 1], _hit)) {
+        _hitList.push(_cpA[i], _cpA[i + 1], _hit.nx, _hit.ny, _hit.depth);
+      }
+    }
+    b.contactPoints(_cpB);
+    for (let i = 0; i < _cpB.length && _hitList.length < 40; i += 2) {
+      if (pointInside(a, _cpB[i], _cpB[i + 1], _hit)) {
+        // normal points out of A, so flip it to push A away from B
+        _hitList.push(_cpB[i], _cpB[i + 1], -_hit.nx, -_hit.ny, _hit.depth);
+      }
+    }
+    const n = _hitList.length / 5;
+    if (!n) return;
+
+    const invMa = 1 / a.mass, invMb = 1 / b.mass;
+    let worst = 0, deepest = 0;
+
+    for (let k = 0; k < n; k++) {
+      const px = _hitList[k * 5], py = _hitList[k * 5 + 1];
+      const nx = _hitList[k * 5 + 2], ny = _hitList[k * 5 + 3];
+      const depth = _hitList[k * 5 + 4];
+      deepest = Math.max(deepest, depth);
+
+      const rax = px - a.x, ray = py - a.y;
+      const rbx = px - b.x, rby = py - b.y;
+      const vax = a.vx - a.omega * ray, vay = a.vy + a.omega * rax;
+      const vbx = b.vx - b.omega * rby, vby = b.vy + b.omega * rbx;
+      const rvx = vax - vbx, rvy = vay - vby;
+      const vn = rvx * nx + rvy * ny;
+      if (vn > 0) continue;                       // already separating
+      worst = Math.max(worst, -vn);
+
+      const raXn = rax * ny - ray * nx;
+      const rbXn = rbx * ny - rby * nx;
+      const denom = invMa + invMb + (raXn * raXn) / a.inertia + (rbXn * rbXn) / b.inertia;
+      if (denom <= 0) continue;
+      const jImp = (-(1 + RESTITUTION) * vn) / (denom * n);
+
+      a.vx += jImp * nx * invMa; a.vy += jImp * ny * invMa;
+      a.omega += (raXn * jImp) / a.inertia;
+      b.vx -= jImp * nx * invMb; b.vy -= jImp * ny * invMb;
+      b.omega -= (rbXn * jImp) / b.inertia;
+    }
+
+    // ease the overlap apart so hulls don't sink into each other
+    if (deepest > 0.03) {
+      const nx = _hitList[2], ny = _hitList[3];
+      const corr = (deepest - 0.02) * 0.35 / (invMa + invMb);
+      a.x += nx * corr * invMa; a.y += ny * corr * invMa;
+      b.x -= nx * corr * invMb; b.y -= ny * corr * invMb;
+    }
+
+    // a hard enough knock writes off both craft
+    const tol = Math.min(a.crashSpeed(), b.crashSpeed());
+    if (worst > tol) {
+      const msg = 'was struck by another stage at ' + worst.toFixed(0) + ' m/s';
+      a.crash = a.crash || msg;
+      b.crash = b.crash || msg;
+    }
+  }
 
   function stepVessel(v, dt, t) {
     if (v._dirty) v.rebuildGraph();

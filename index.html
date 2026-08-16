@@ -36,13 +36,23 @@
       <b>Z / X</b><span>Full throttle / cut</span>
       <b>A / D</b><span>Rotate left / right</span>
       <b>Space</b><span>Fire next stage</span>
-      <b>T</b><span>Cycle stability assist</span>
+      <b>T</b><span>Cycle the autopilot (Off → Hold → Prograde → Retrograde → Away)</span>
       <b>M</b><span>Map view</span>
       <b>, / .</b><span>Time warp down / up</span>
       <b>Wheel / pinch</b><span>Zoom</span>
       <b>R</b><span>Revert to launch</span>
       <b>B</b><span>Back to the build hangar</span>
       <b>Esc</b><span>Menu</span>
+    </div>
+    <h2>The autopilot</h2>
+    <p class="tag" style="margin:-6px 0 12px">The bar at the top of the flight screen points the nose for you,
+      so you can concentrate on the throttle.</p>
+    <div class="keyGrid">
+      <b>Off</b><span>You steer by hand</span>
+      <b>Hold</b><span>Locks the heading you have right now</span>
+      <b>Prograde</b><span>Nose along your direction of travel — burn to go faster and raise your orbit</span>
+      <b>Retrograde</b><span>Nose against your travel — burn to slow down, drop out of orbit, or land</span>
+      <b>Away</b><span>Nose straight up, away from the world below</span>
     </div>
     <h2>Building</h2>
     <div class="keyGrid">
@@ -112,6 +122,7 @@
     <button data-act="map" id="mapBtn">🗺 Map</button>
   </div>
 
+  <div id="hudCol">
   <div id="hud">
     <div class="hudRow"><span>Altitude</span><b id="hAlt">0 m</b></div>
     <div class="hudRow"><span>Speed</span><b id="hSpd">0 m/s</b></div>
@@ -128,15 +139,25 @@
     <div class="fuelBar"><div id="fuelFill"></div></div>
     <div id="fuelTxt">0%</div>
   </div>
+  </div>
 
   <div id="stagePanel"></div>
 
-  <div id="sasBox">
-    <button data-sas="off" class="on">Off</button>
-    <button data-sas="hold">Hold</button>
-    <button data-sas="pro">Pro</button>
-    <button data-sas="retro">Retro</button>
-    <button data-sas="up">Up</button>
+  <div id="sasWrap">
+    <div id="sasBox">
+      <span class="sasLabel">AUTOPILOT<br><i>points the nose for you</i></span>
+      <button data-sas="off" class="on"
+        title="Autopilot off. You steer by hand with A / D.">Off</button>
+      <button data-sas="hold"
+        title="Locks onto the heading the rocket has right now and keeps it there.">Hold</button>
+      <button data-sas="pro"
+        title="Prograde — points the nose along the direction you are travelling. Burn here to gain speed and raise your orbit.">Prograde</button>
+      <button data-sas="retro"
+        title="Retrograde — points the nose backwards along your direction of travel. Burn here to slow down, drop out of orbit, or land.">Retrograde</button>
+      <button data-sas="up"
+        title="Points the nose straight away from the world below. Useful on the pad and for hovering during a landing.">Away</button>
+    </div>
+    <div id="sasHint">Autopilot off — steer by hand with A / D</div>
   </div>
 
   <div id="controls">

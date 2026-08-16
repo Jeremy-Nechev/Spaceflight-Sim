@@ -188,8 +188,14 @@ button:disabled{opacity:.4;cursor:default}
 #bpClose{width:100%;margin-top:12px}
 
 /* ───────────── flight HUD ───────────── */
+/* one flow column so the fuel gauge can never land on top of the readouts,
+   whatever the window shape */
+#hudCol{
+  position:absolute;left:10px;top:56px;width:186px;
+  display:flex;flex-direction:column;gap:8px;
+}
 #hud{
-  position:absolute;left:10px;top:56px;width:186px;padding:9px 12px;
+  padding:9px 12px;
   background:var(--panel);border:1px solid var(--edge);border-radius:10px;font-size:12px;
 }
 .hudRow{display:flex;justify-content:space-between;align-items:baseline;padding:2.5px 0}
@@ -199,7 +205,7 @@ button:disabled{opacity:.4;cursor:default}
 .hudRow.soi b{color:var(--accent)}
 
 #fuelBox{
-  position:absolute;left:10px;top:calc(56px + 174px);width:186px;padding:8px 12px;
+  padding:8px 12px;
   background:var(--panel);border:1px solid var(--edge);border-radius:10px;
 }
 .fuelLabel{font-size:10px;letter-spacing:2px;color:var(--dim);margin-bottom:5px}
@@ -224,12 +230,26 @@ button:disabled{opacity:.4;cursor:default}
 }
 .stageRow span{flex:1;color:var(--dim)}
 
-#sasBox{
-  position:absolute;left:50%;transform:translateX(-50%);top:52px;display:flex;gap:3px;
-  background:rgba(10,16,28,.82);border:1px solid var(--edge);border-radius:8px;padding:3px;
+#sasWrap{
+  position:absolute;left:50%;transform:translateX(-50%);top:50px;
+  display:flex;flex-direction:column;align-items:center;gap:4px;pointer-events:none;
 }
-#sasBox button{padding:5px 11px;font-size:11px;border:0;background:transparent;border-radius:6px}
+#sasWrap>*{pointer-events:auto}
+#sasBox{
+  display:flex;align-items:center;gap:3px;
+  background:rgba(10,16,28,.86);border:1px solid var(--edge);border-radius:8px;padding:3px;
+}
+.sasLabel{
+  font-size:8.5px;letter-spacing:1.4px;color:var(--dim);line-height:1.25;
+  padding:0 9px 0 6px;border-right:1px solid var(--edge);text-align:right;margin-right:3px;
+}
+.sasLabel i{font-style:normal;letter-spacing:0;font-size:8px;opacity:.75;text-transform:none}
+#sasBox button{padding:5px 10px;font-size:11px;border:0;background:transparent;border-radius:6px}
 #sasBox button.on{background:linear-gradient(180deg,#3d8fe6,#1f63b4);color:#fff}
+#sasHint{
+  font-size:11px;color:#9fc4e8;background:rgba(10,16,28,.8);
+  border:1px solid var(--edge);border-radius:14px;padding:3px 12px;white-space:nowrap;
+}
 
 #controls{position:absolute;left:0;right:0;bottom:0;padding:14px;display:flex;align-items:flex-end;gap:14px;pointer-events:none}
 #controls>*{pointer-events:auto}
@@ -277,8 +297,12 @@ button:disabled{opacity:.4;cursor:default}
   #palList{grid-template-columns:1fr}
   #buildStats{width:150px;font-size:11px;padding:8px 10px}
   #stageEdit{width:150px;top:212px}
-  #hud{width:150px;font-size:11px}
-  #fuelBox{width:150px;top:calc(56px + 166px)}
+  #hudCol{width:150px}
+  #hud{font-size:11px}
+  #sasWrap{top:46px}
+  .sasLabel{display:none}
+  #sasBox button{padding:5px 8px;font-size:10px}
+  #sasHint{font-size:10px;max-width:90vw;white-space:normal;text-align:center}
   #stagePanel{width:132px}
   .menuCard h1{font-size:26px}
   .menuCard h1 span{font-size:20px;letter-spacing:6px}

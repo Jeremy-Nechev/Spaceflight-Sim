@@ -143,7 +143,11 @@
       for (const j of res.junk) S.fx.puff(j.x, j.y, 1.6);
       const i = F.vessels.indexOf(v);
       if (i >= 0) F.vessels.splice(i, 1);
-      for (const nv of res.vessels) F.vessels.push(nv);
+      for (const nv of res.vessels) {
+        // the pieces start out touching — let them drift clear before hulls bite
+        nv.noHitUntil = F.t + 0.45;
+        F.vessels.push(nv);
+      }
       if (res.primary) F.focus = res.primary;
     }
     F.refreshStages();
@@ -157,12 +161,22 @@
     F.syncThrottle();
   };
 
+  const SAS_HINT = {
+    off: 'Autopilot off — steer by hand with A / D',
+    hold: 'Holding the heading the rocket had when you switched this on',
+    pro: 'Prograde — nose along your direction of travel. Burn to go faster',
+    retro: 'Retrograde — nose against your travel. Burn to slow down or land',
+    up: 'Away — nose pointed straight up, away from the world below'
+  };
+
   F.setSas = function (mode) {
     const v = F.focus;
     if (!v) return;
     v.sas = mode;
     if (mode !== 'off') v.sasTarget = v.angle;
     U.$$('#sasBox button').forEach(b => b.classList.toggle('on', b.dataset.sas === mode));
+    const hint = document.getElementById('sasHint');
+    if (hint) hint.textContent = SAS_HINT[mode] || '';
   };
 
   F.cycleSas = function () {
@@ -217,7 +231,7 @@
     }
     W.t = F.t;
 
-    S.fx.update(rails ? 0 : dt, F.t);
+    S.fx.update(rails ? 0 : dt, F.t, v ? (v.nearBody || W.earth) : W.earth);
     cleanup();
     checkGoals();
 
