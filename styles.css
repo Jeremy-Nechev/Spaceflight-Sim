@@ -144,7 +144,9 @@ button:disabled{opacity:.4;cursor:default}
   background:rgba(255,255,255,.04);border:1px solid transparent;cursor:pointer;
 }
 .seRow:hover{border-color:var(--edge-hot);background:rgba(120,190,255,.1)}
+.seRow.dragover{border-color:var(--accent);background:rgba(77,163,255,.18);box-shadow:0 0 10px rgba(77,163,255,.35)}
 .seRow.unassigned{background:rgba(150,60,60,.16);border-color:rgba(255,120,120,.3)}
+.seRow.unassigned.dragover{border-color:#ff9090}
 .seNum{
   font-family:var(--mono);font-size:10px;width:16px;height:16px;flex:0 0 16px;border-radius:4px;
   background:rgba(77,163,255,.28);display:grid;place-items:center;color:#cfe6ff;
@@ -156,6 +158,8 @@ button:disabled{opacity:.4;cursor:default}
   border:1px solid var(--edge);display:grid;place-items:center;overflow:hidden;
 }
 .seChip.sel{border-color:var(--accent2);box-shadow:0 0 8px rgba(255,159,67,.6)}
+.seChip{cursor:grab}
+.seChip.dragging{opacity:.35}
 .seChip canvas{display:block}
 .seBtns{display:flex;flex-direction:column;gap:1px}
 .seBtns button{padding:0 4px;font-size:9px;line-height:11px;border-radius:3px;background:rgba(255,255,255,.06)}

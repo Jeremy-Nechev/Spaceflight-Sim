@@ -682,14 +682,17 @@
 
   const FX = S.fx = {};
   const parts = [];
-  const MAXP = 2400;
+  // Smoke now lingers and keeps billowing for up to a minute (see FX.exhaust),
+  // so the budget has to be big enough to hold a full minute of trail instead
+  // of just a few seconds of it.
+  const MAXP = 6000;
   FX.onNote = null;
 
   function push(o) {
     if (o.bounce == null) o.bounce = 0;      // how much it rebounds off the ground
     if (o.gdrag == null) o.gdrag = 0.90;     // how fast it slows once it's down
-    // At the budget, retire the oldest rather than refusing the newest —
-    // otherwise a heavy smoker starves its own plume at the nozzle and the
+    // At the budget, retire the oldest rather than refusing the newest.
+    // Otherwise a heavy smoker starves its own plume at the nozzle and the
     // trail is made entirely of stale puffs.
     if (parts.length >= MAXP) parts.shift();
     parts.push(o);
@@ -739,7 +742,9 @@
         x: _pw.x - n.x * back + jx, y: _pw.y - n.y * back + jy,
         vx: v.vx - n.x * sp + (Math.random() - 0.5) * scatter,
         vy: v.vy - n.y * sp + (Math.random() - 0.5) * scatter,
-        life: 0, max: (5.5 + Math.random() * 6) * (thick ? 1.9 : 1),
+        // billows for about a minute, still slowly swelling the whole time,
+        // before it's finally cleared
+        life: 0, max: 54 + Math.random() * 12,
         r0: w * (thick ? 1.1 : 0.6), r1: w * (2.8 + 3.4 * dens) * (thick ? 2.6 : 1.15),
         col: thick ? [246, 244, 240] : [235, 235, 240],
         a0: (thick ? 0.34 : 0.30) * dens, drag: 0.85, grav: 0,

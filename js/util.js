@@ -84,7 +84,7 @@ window.SFS = window.SFS || {};
   };
 
   U.time = function (s) {
-    if (!isFinite(s) || s < 0) return '—';
+    if (!isFinite(s) || s < 0) return 'N/A';
     s = Math.floor(s);
     const d = Math.floor(s / 86400), h = Math.floor(s / 3600) % 24;
     const m = Math.floor(s / 60) % 60, ss = s % 60;

@@ -50,8 +50,8 @@
     <div class="keyGrid">
       <b>Off</b><span>You steer by hand</span>
       <b>Hold</b><span>Locks the heading you have right now</span>
-      <b>Prograde</b><span>Nose along your direction of travel — burn to go faster and raise your orbit</span>
-      <b>Retrograde</b><span>Nose against your travel — burn to slow down, drop out of orbit, or land</span>
+      <b>Prograde</b><span>Nose along your direction of travel. Burn to go faster and raise your orbit</span>
+      <b>Retrograde</b><span>Nose against your travel. Burn to slow down, drop out of orbit, or land</span>
       <b>Away</b><span>Nose straight up, away from the world below</span>
     </div>
     <h2>Building</h2>
@@ -91,7 +91,7 @@
     <div class="seHead"><span>STAGE GROUPS</span><button id="seAuto" title="Rebuild groups from the layout">Auto</button></div>
     <div id="seList"></div>
     <button id="seAdd" class="seAdd">+ Add stage</button>
-    <div class="seHint">Click a part chip, then a stage row to move it there.</div>
+    <div class="seHint">Drag a part chip to a stage row (or click a chip, then click the row) to move it there.</div>
   </div>
 
   <div id="buildHint" class="hint">Pick a part on the left, then click in the hangar to place it.</div>
@@ -127,8 +127,8 @@
     <div class="hudRow"><span>Altitude</span><b id="hAlt">0 m</b></div>
     <div class="hudRow"><span>Speed</span><b id="hSpd">0 m/s</b></div>
     <div class="hudRow"><span>Vertical</span><b id="hVs">0 m/s</b></div>
-    <div class="hudRow"><span>Apoapsis</span><b id="hAp">—</b></div>
-    <div class="hudRow"><span>Periapsis</span><b id="hPe">—</b></div>
+    <div class="hudRow"><span>Apoapsis</span><b id="hAp">N/A</b></div>
+    <div class="hudRow"><span>Periapsis</span><b id="hPe">N/A</b></div>
     <div class="hudRow"><span>TWR</span><b id="hTwr">0.00</b></div>
     <div class="hudRow"><span>Δv left</span><b id="hDv">0 m/s</b></div>
     <div class="hudRow soi"><span>Sphere</span><b id="hSoi">Earth</b></div>
@@ -158,13 +158,13 @@
       <button data-sas="hold"
         title="Locks onto the heading the rocket has right now and keeps it there.">Hold</button>
       <button data-sas="pro"
-        title="Prograde — points the nose along the direction you are travelling. Burn here to gain speed and raise your orbit.">Prograde</button>
+        title="Prograde: points the nose along the direction you are travelling. Burn here to gain speed and raise your orbit.">Prograde</button>
       <button data-sas="retro"
-        title="Retrograde — points the nose backwards along your direction of travel. Burn here to slow down, drop out of orbit, or land.">Retrograde</button>
+        title="Retrograde: points the nose backwards along your direction of travel. Burn here to slow down, drop out of orbit, or land.">Retrograde</button>
       <button data-sas="up"
         title="Points the nose straight away from the world below. Useful on the pad and for hovering during a landing.">Away</button>
     </div>
-    <div id="sasHint">Autopilot off — steer by hand with A / D</div>
+    <div id="sasHint">Autopilot off: steer by hand with A / D</div>
   </div>
 
   <div id="controls">

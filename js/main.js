@@ -161,14 +161,14 @@
       row('Height', s.height.toFixed(1) + ' m') +
       row('Parts', s.count) +
       row('Stages', s.stages) +
-      row('Lift-off TWR', s.twr ? s.twr.toFixed(2) : '—') +
+      row('Lift-off TWR', s.twr ? s.twr.toFixed(2) : 'N/A') +
       row('Total Δv', U.speed(s.dv));
     const warn = [];
     if (!s.count) warn.push('Nothing built yet.');
     else {
-      if (!s.pods) warn.push('⚠ No command pod — no steering.');
+      if (!s.pods) warn.push('⚠ No command pod: no steering.');
       if (!s.engines) warn.push('⚠ No engines.');
-      else if (s.twr && s.twr < 1.02) warn.push('⚠ TWR ' + s.twr.toFixed(2) + ' — it can\'t lift off.');
+      else if (s.twr && s.twr < 1.02) warn.push('⚠ TWR ' + s.twr.toFixed(2) + ' too low: it can\'t lift off.');
       if (B.unassigned().length) warn.push('⚠ ' + B.unassigned().length + ' part(s) in no stage group.');
     }
     if (warn.length) h += '<div class="warn">' + warn.join('<br>') + '</div>';
@@ -193,7 +193,7 @@
   function stageRow(group, i) {
     const row = document.createElement('div');
     row.className = 'seRow' + (i < 0 ? ' unassigned' : '');
-    row.title = i < 0 ? 'Not staged — these will never fire' : 'Stage ' + (i + 1);
+    row.title = i < 0 ? 'Not staged: these will never fire' : 'Stage ' + (i + 1);
 
     const num = document.createElement('div');
     num.className = 'seNum';
@@ -208,6 +208,7 @@
       const c = document.createElement('div');
       c.className = 'seChip' + (B.chip === uid ? ' sel' : '');
       c.title = p.def.name;
+      c.draggable = true;
       c.appendChild(S.partIcon(p.def, 18));
       c.onclick = ev => {
         ev.stopPropagation();
@@ -215,6 +216,14 @@
         B.sel = p;
         refreshStageEdit();
       };
+      c.ondragstart = ev => {
+        ev.stopPropagation();
+        B.chip = uid;
+        c.classList.add('dragging');
+        ev.dataTransfer.effectAllowed = 'move';
+        ev.dataTransfer.setData('text/plain', String(uid));
+      };
+      c.ondragend = () => { c.classList.remove('dragging'); B.chip = null; };
       chips.appendChild(c);
     }
     row.appendChild(chips);
@@ -234,6 +243,15 @@
 
     row.onclick = () => {
       if (B.chip != null) { B.moveToStage(B.chip, i); B.chip = null; }
+    };
+    row.ondragover = ev => { ev.preventDefault(); ev.dataTransfer.dropEffect = 'move'; row.classList.add('dragover'); };
+    row.ondragleave = () => row.classList.remove('dragover');
+    row.ondrop = ev => {
+      ev.preventDefault();
+      row.classList.remove('dragover');
+      const uid = B.chip != null ? B.chip : Number(ev.dataTransfer.getData('text/plain'));
+      if (uid != null && !Number.isNaN(uid)) B.moveToStage(uid, i);
+      B.chip = null;
     };
     return row;
   }
@@ -272,7 +290,7 @@
     U.store.set('lastBlueprint', bp);
     if (F.launch(bp)) {
       setScene('flight');
-      F.toast('Throttle is at ' + Math.round(F.focus.throttle * 100) + '% — press Space to launch');
+      F.toast('Throttle is at ' + Math.round(F.focus.throttle * 100) + '%. Press Space to launch');
     }
   }
 

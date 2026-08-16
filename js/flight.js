@@ -162,11 +162,11 @@
   };
 
   const SAS_HINT = {
-    off: 'Autopilot off — steer by hand with A / D',
+    off: 'Autopilot off: steer by hand with A / D',
     hold: 'Holding the heading the rocket had when you switched this on',
-    pro: 'Prograde — nose along your direction of travel. Burn to go faster',
-    retro: 'Retrograde — nose against your travel. Burn to slow down or land',
-    up: 'Away — nose pointed straight up, away from the world below'
+    pro: 'Prograde: nose along your direction of travel. Burn to go faster',
+    retro: 'Retrograde: nose against your travel. Burn to slow down or land',
+    up: 'Away: nose pointed straight up, away from the world below'
   };
 
   F.setSas = function (mode) {
@@ -393,15 +393,15 @@
     if (left > 0) {
       h += '<div class="go">Point <b>Prograde</b>, wait for zero</div>';
     } else if (left > -Math.max(20, (secs || 20) * 1.5)) {
-      h += '<div class="go hot">BURN NOW — prograde</div>';
+      h += '<div class="go hot">BURN NOW: prograde</div>';
     } else {
-      h += '<div class="go">Window passed — recalculate</div>';
+      h += '<div class="go">Window passed. Recalculate</div>';
     }
     if (!p.intercept) {
       h += '<div class="note">This path misses ' + F.target.name +
         '. Burn anyway, then recalculate for a correction.</div>';
     } else if (impact) {
-      h += '<div class="note">You will arrive on a collision course — burn ' +
+      h += '<div class="note">You will arrive on a collision course. Burn ' +
         'retrograde on the way in to slow down and land.</div>';
     }
     body.innerHTML = h;
@@ -445,7 +445,7 @@
 
     const el = F.el;
     if (v.landed) {
-      set('hAp', '—'); set('hPe', '—');
+      set('hAp', 'N/A'); set('hPe', 'N/A');
     } else if (el && el.e < 1 && isFinite(el.ap)) {
       set('hAp', U.dist(el.ap - el.body.seaLevel));
       // below the surface the periapsis is a re-entry point, not an orbit
@@ -503,7 +503,7 @@
       }
       const label = Object.keys(kinds)
         .map(k => (ICON[k] || '•') + (kinds[k] > 1 ? '×' + kinds[k] : ''))
-        .join(' ') || '—';
+        .join(' ') || 'N/A';
       row.innerHTML = '<i>' + (i + 1) + '</i><span>' + label + '</span>';
       row.onclick = () => F.stage(i);
       panel.appendChild(row);

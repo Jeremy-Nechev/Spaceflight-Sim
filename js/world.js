@@ -390,7 +390,7 @@
     if (soi !== parent) return { ok: false, reason: 'Escape ' + soi.name + ' first.' };
 
     const el = W.elements(parent, v.x, v.y, v.vx, v.vy, t);
-    if (el.e >= 1) return { ok: false, reason: 'You are already on an escape path — circularise first.' };
+    if (el.e >= 1) return { ok: false, reason: 'You are already on an escape path. Circularise first.' };
     if (el.pe < parent.radius + 20000) return { ok: false, reason: 'Get into a stable orbit first.' };
 
     const mu = parent.mu;
