@@ -59,11 +59,15 @@
 
   R.zoomBy = function (f) {
     if (cam.map) {
+      // the map spans planet-to-planet distances, so the same wheel/pinch
+      // step that feels right up close made the map lurch — soften it here
+      // rather than in every caller
+      const soft = Math.pow(f, 0.45);
       // recover if it ever got stuck at zero or NaN, otherwise multiplying
       // by the wheel factor can never climb back out
       let z = cam.mapZoomT;
       if (!isFinite(z) || z <= 0) z = cam.mapDefault;
-      cam.mapZoomT = U.clamp(z * f, cam.mapMin, cam.mapMax);
+      cam.mapZoomT = U.clamp(z * soft, cam.mapMin, cam.mapMax);
     } else {
       let z = cam.zoomT;
       if (!isFinite(z) || z <= 0) z = 4;

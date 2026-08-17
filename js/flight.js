@@ -29,6 +29,7 @@
   let predTimer = 0, hudTimer = 0, smashCount = 0;
   let pendingEnd = null;                  // { title, text, delay } — holds the mission-failed panel back while the wreck burns
   let echoVessels = [];                   // spent stages still burning after separation, kept audible until off screen
+  let inAtmo = null;                      // null = not tracking yet; true/false once we know, so we can toast on the flip
 
   /* ═══════════════════ mission log ═══════════════════ */
 
@@ -91,6 +92,7 @@
     smashCount = 0;
     pendingEnd = null;
     echoVessels = [];
+    inAtmo = null;
     F.reachedSpace = false;
 
     const v = S.vessel.fromBlueprint(F.bp);
@@ -346,6 +348,18 @@
     const b = v.nearBody || W.earth;
 
     if (v.altASL > 60000) { unlock('space'); F.reachedSpace = true; }
+
+    // small notice on the way through the atmosphere's edge, in either direction
+    if (b.atmo) {
+      const nowIn = v.altASL < b.atmo.height;
+      if (inAtmo == null) inAtmo = nowIn;           // first look — just set the baseline, no toast
+      else if (nowIn !== inAtmo) {
+        F.toast(nowIn ? 'Entering the atmosphere' : 'Leaving the atmosphere');
+        inAtmo = nowIn;
+      }
+    } else {
+      inAtmo = null;   // nothing to track here (e.g. the Moon) — re-baseline silently next time we're back near an atmosphere
+    }
 
     const soi = W.soiBody(v.x, v.y, F.t);
     if (soi === W.moon) unlock('moonSoi');

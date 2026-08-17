@@ -300,8 +300,10 @@ button:disabled{opacity:.4;cursor:default}
 }
 #throttleFill{position:absolute;left:0;right:0;bottom:0;height:0%;background:linear-gradient(0deg,#ff7a18,#ffd06b)}
 #throttleTxt{font-family:var(--mono);font-size:11px;color:var(--dim)}
-#rotWrap{display:flex;gap:8px;margin-left:auto}
+#rotWrap{display:flex;flex-direction:column;align-items:center;gap:5px;margin-left:auto}
+.rotBtns{display:flex;gap:8px}
 .rotBtn{width:58px;height:58px;border-radius:50%;font-size:24px;line-height:1;padding:0}
+.rotLabel{font-size:10px;letter-spacing:.6px;color:var(--dim);white-space:nowrap}
 #btnStage{
   width:92px;height:58px;border-radius:12px;font-weight:700;letter-spacing:1.4px;font-size:13px;
   background:linear-gradient(180deg,#e6663d,#b4341f);border-color:#ff9c7c;color:#fff;
@@ -348,4 +350,5 @@ button:disabled{opacity:.4;cursor:default}
   .menuCard h1 span{font-size:20px;letter-spacing:6px}
   .bar .barTitle{display:none}
   .rotBtn{width:52px;height:52px}
+  .rotLabel{display:none}
 }
