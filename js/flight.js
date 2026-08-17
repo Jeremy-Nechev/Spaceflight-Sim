@@ -14,6 +14,7 @@
   const WARPS = [1, 2, 5, 10, 50, 500, 5000, 50000];
   const RAILS_FROM = 4;                 // index at which we go on rails
   const PHYS_DT = 1 / 120;
+  const MAX_MISSIONS = 6;               // player-controllable craft alive at once
 
   F.vessels = [];
   F.focus = null;
@@ -30,6 +31,12 @@
   let pendingEnd = null;                  // { title, text, delay } — holds the mission-failed panel back while the wreck burns
   let echoVessels = [];                   // spent stages still burning after separation, kept audible until off screen
   let inAtmo = null;                      // null = not tracking yet; true/false once we know, so we can toast on the flip
+
+  // whether the flight scene is actually on screen — the sim itself keeps
+  // running regardless (background missions), but there's no point painting
+  // the HUD or playing engine audio for a craft nobody is looking at
+  let hudActive = true;
+  F.setSceneActive = function (active) { hudActive = active; };
 
   /* ═══════════════════ mission log ═══════════════════ */
 
@@ -76,29 +83,15 @@
 
   /* ═══════════════════ launch / revert ═══════════════════ */
 
-  F.launch = function (bp) {
-    F.bp = JSON.parse(JSON.stringify(bp));
-    return F.reset();
-  };
+  let missionSeq = 1;
 
-  F.reset = function () {
-    W.resetScenery();
-    S.fx.clear();
-    F.vessels.length = 0;
-    F.t = 0;
-    W.t = 0;
-    F.warpIdx = 0;
-    F.over = null;
-    smashCount = 0;
-    pendingEnd = null;
-    echoVessels = [];
-    inAtmo = null;
-    F.reachedSpace = false;
+  /** Build a fresh vessel from a blueprint and sit it on the pad, nose
+      straight up. Shared by a brand-new game, an additional launch
+      alongside missions already flying, and a per-mission revert. */
+  function spawnOnPad(bp, missionOverride) {
+    const v = S.vessel.fromBlueprint(bp);
+    if (!v) return null;
 
-    const v = S.vessel.fromBlueprint(F.bp);
-    if (!v) return false;
-
-    // sit it on the pad, nose straight up
     const th = W.padTheta;
     const g = W.terrain(W.earth, th);
     let lo = Infinity;
@@ -114,6 +107,39 @@
     v.sas = 'off';
     v.sasTarget = v.angle;
 
+    v.mission = missionOverride || {
+      id: 'm' + (missionSeq++), name: bp.name || 'Rocket',
+      launchedAt: F.t, controllable: true,
+      bp: JSON.parse(JSON.stringify(bp))
+    };
+    return v;
+  }
+
+  F.launch = function (bp) {
+    F.bp = JSON.parse(JSON.stringify(bp));
+    return F.reset();
+  };
+
+  /** Wipes the whole sim and starts a brand-new game with one vessel. */
+  F.reset = function () {
+    W.resetScenery();
+    S.fx.clear();
+    F.vessels.length = 0;
+    F.t = 0;
+    W.t = 0;
+    F.warpIdx = 0;
+    F.over = null;
+    smashCount = 0;
+    pendingEnd = null;
+    echoVessels = [];
+    inAtmo = null;
+    F.reachedSpace = false;
+    F.target = null;
+    F.plan = null;
+
+    const v = spawnOnPad(F.bp);
+    if (!v) return false;
+
     F.vessels.push(v);
     F.focus = v;
     F.running = true;
@@ -126,8 +152,38 @@
     return true;
   };
 
+  /** Launches a second (or third...) craft alongside whatever is already
+      flying, without touching sim time, scenery, or any other mission. */
+  F.launchAdditional = function (bp) {
+    const missions = F.vessels.filter(x => x.mission);
+    if (missions.length >= MAX_MISSIONS) {
+      F.toast('Too many active missions (max ' + MAX_MISSIONS + '). Recover or lose one first.', 'bad');
+      return false;
+    }
+    const v = spawnOnPad(bp);
+    if (!v) return false;
+    F.vessels.push(v);
+    F.running = true;
+    F.setFocus(v);
+    return true;
+  };
+
+  /** Per-mission revert: rebuild the currently-focused craft from its own
+      launch blueprint, leaving every other mission running untouched. */
   F.revert = function () {
-    if (F.bp) F.reset();
+    const v = F.focus;
+    if (!v || !v.mission || !v.mission.bp) { hideEnd(); return; }
+    const idx = F.vessels.indexOf(v);
+    if (idx >= 0) F.vessels.splice(idx, 1);
+    const nv = spawnOnPad(v.mission.bp, v.mission);
+    if (nv) {
+      F.vessels.push(nv);
+      F.setFocus(nv);
+    } else if (F.vessels.length) {
+      F.focus = F.vessels[0];
+    } else {
+      F.focus = null; F.running = false;
+    }
     hideEnd();
   };
 
@@ -154,7 +210,10 @@
         nv.noHitUntil = F.t + 0.45;
         F.vessels.push(nv);
       }
-      if (res.primary) F.focus = res.primary;
+      if (res.primary) {
+        res.primary.mission = v.mission;   // V.split() builds a fresh Vessel — carry the tag over
+        if (v === F.focus) F.focus = res.primary;
+      }
       // a discarded piece can still be burning down (e.g. a booster cut loose
       // mid-flame) — its engine sound keeps playing until it drifts off screen
       // instead of snapping silent the instant we stop flying it
@@ -183,14 +242,21 @@
     up: 'Away: nose pointed straight up, away from the world below'
   };
 
+  /** UI-only: reflect a mode in the SAS buttons/hint without touching the
+      vessel — used when merely displaying a newly-focused craft's already-set
+      autopilot state, as opposed to the player actually changing it. */
+  function syncSasButtons(mode) {
+    U.$$('#sasBox button').forEach(b => b.classList.toggle('on', b.dataset.sas === mode));
+    const hint = document.getElementById('sasHint');
+    if (hint) hint.textContent = SAS_HINT[mode] || '';
+  }
+
   F.setSas = function (mode) {
     const v = F.focus;
     if (!v) return;
     v.sas = mode;
     if (mode !== 'off') v.sasTarget = v.angle;
-    U.$$('#sasBox button').forEach(b => b.classList.toggle('on', b.dataset.sas === mode));
-    const hint = document.getElementById('sasHint');
-    if (hint) hint.textContent = SAS_HINT[mode] || '';
+    syncSasButtons(mode);
   };
 
   F.cycleSas = function () {
@@ -216,6 +282,21 @@
     return onRailsOk ? WARPS.length - 1 : RAILS_FROM - 1;
   }
 
+  /** Switch which vessel the player is flying/looking at — every other
+      control (keys, throttle, staging, SAS) already just reads F.focus, so
+      retargeting it is all that's needed to redirect control. */
+  F.setFocus = function (v) {
+    if (!v || v === F.focus) return;
+    F.focus = v;
+    R.cam.zoomT = U.clamp(130 / Math.max(6, v.radius() * 2), 1.2, 9);
+    F.refreshStages();
+    syncSasButtons(v.sas);       // just reflect its current mode — don't reassign sasTarget
+    F.setWarp(Math.min(F.warpIdx, maxWarpIdx()));
+    F.syncThrottle();
+    F.predict(true);
+    F.toast('Now flying ' + (v.mission ? v.mission.name : describe(v)));
+  };
+
   /* ═══════════════════ per-frame update ═══════════════════ */
 
   F.update = function (dt, real) {
@@ -227,7 +308,7 @@
     const warp = WARPS[F.warpIdx];
     const rails = F.warpIdx >= RAILS_FROM;
 
-    if (v && !F.over) applyInput(v, real);
+    if (v && !F.over && hudActive) applyInput(v, real);
 
     const simDt = dt * warp;
     if (rails) {
@@ -249,16 +330,21 @@
     cleanup();
     checkGoals();
 
-    // let the explosion play out before the mission-failed panel covers it
+    // let the explosion play out before the mission-failed panel covers it.
+    // Only actually pops the modal if we're still looking at this vessel —
+    // if the player switched away in the meantime, a toast already covered
+    // it (see cleanup()), and popping a delayed modal now would set the
+    // (global, singleton) F.over flag and block whatever *other* mission
+    // they've since switched their attention to.
     if (pendingEnd) {
       pendingEnd.delay -= real;
       if (pendingEnd.delay <= 0) {
-        endMission(pendingEnd.title, pendingEnd.text);
+        if (hudActive && !F.over) endMission(pendingEnd.title, pendingEnd.text);
         pendingEnd = null;
       }
     }
 
-    if (S.audio && v) {
+    if (hudActive && S.audio && v) {
       const thr = v.liveThrust ? U.clamp(v.liveThrust / (v.mass * 12), 0, 1) : 0;
       let hi = rails ? 0 : thr, atmoF = v.atmoF || 0;
 
@@ -281,19 +367,22 @@
 
     predTimer -= real;
     if (predTimer <= 0) { F.predict(); predTimer = 0.3; }
+    F.predictOthers(real);
 
-    hudTimer -= real;
-    if (hudTimer <= 0) { F.hud(); if (F.target) F.paintXfer(); hudTimer = 1 / 15; }
+    if (hudActive) {
+      hudTimer -= real;
+      if (hudTimer <= 0) { F.hud(); if (F.target) F.paintXfer(); hudTimer = 1 / 15; }
 
-    // planning is expensive, so only redo it when the orbit has actually
-    // changed — i.e. shortly after a burn ends
-    if (F.target) {
-      const burning = (v && v.liveThrust > 0);
-      if (wasBurning && !burning) replanIn = 1.2;
-      wasBurning = burning;
-      if (replanIn > 0) {
-        replanIn -= real;
-        if (replanIn <= 0) F.replan();
+      // planning is expensive, so only redo it when the orbit has actually
+      // changed — i.e. shortly after a burn ends
+      if (F.target) {
+        const burning = (v && v.liveThrust > 0);
+        if (wasBurning && !burning) replanIn = 1.2;
+        wasBurning = burning;
+        if (replanIn > 0) {
+          replanIn -= real;
+          if (replanIn <= 0) F.replan();
+        }
       }
     }
   };
@@ -316,22 +405,28 @@
       if (ves.crash && !ves.dead) {
         ves.dead = true;
         S.fx.explode(ves);
-        if (ves === v && !pendingEnd) {
+        if (ves === v && !pendingEnd && hudActive) {
           pendingEnd = { title: 'Mission Failed', text: 'Your craft ' + ves.crash + '.', delay: 5 };
+        } else if (ves.mission) {
+          // a background/non-focus mission was lost — say so, but don't pop
+          // the (flight-scene-only) mission-failed modal over whatever screen
+          // the player is actually looking at
+          F.toast((ves.mission.name || 'A craft') + ' was lost: ' + ves.crash, 'bad');
         }
       }
       if (ves.dead) { F.vessels.splice(i, 1); continue; }
-      if (ves !== v && v) {
-        const d = Math.hypot(ves.x - v.x, ves.y - v.y);
-        if (d > 60000 || F.vessels.length > 10) {
-          if (ves.debris) F.vessels.splice(i, 1);
-        }
+      // only ephemeral junk (spent stages/debris) ever gets pruned by distance
+      // or headcount — a tagged mission sticks around until it actually dies
+      if (ves !== v && ves.debris && !ves.mission) {
+        const d = v ? Math.hypot(ves.x - v.x, ves.y - v.y) : Infinity;
+        const junkCount = F.vessels.reduce((n, x) => n + (x.mission ? 0 : 1), 0);
+        if (d > 60000 || junkCount > 10) F.vessels.splice(i, 1);
       }
     }
     // if the piece we're flying lost its brain, hand over to one that has one
     if (v && !v.hasControl()) {
       const alt = F.vessels.find(x => x !== v && x.hasControl());
-      if (alt) { F.focus = alt; F.refreshStages(); F.toast('Control handed to ' + describe(alt)); }
+      if (alt) { F.focus = alt; F.refreshStages(); F.toast('Control handed to ' + (alt.mission ? alt.mission.name : describe(alt))); }
     }
     if (F.focus && F.vessels.indexOf(F.focus) < 0) F.focus = F.vessels[0] || null;
   }
@@ -375,7 +470,19 @@
       if (b === W.earth && F.reachedSpace) {
         unlock('home');
         if (v.inWater) unlock('splash');
-        if (!F.over) endMission('Welcome Home', 'You landed back on Earth in one piece.');
+        // once per vessel — otherwise this fires every frame it sits landed
+        if (!v.homeAnnounced) {
+          v.homeAnnounced = true;
+          // the end-of-mission modal only makes sense for the craft you're
+          // actually looking at; a background mission just gets a toast, so
+          // it can't leave the global F.over flag set and block whatever
+          // *other* mission the player is flying/looking at right now
+          if (hudActive && v === F.focus && !F.over) {
+            endMission('Welcome Home', 'You landed back on Earth in one piece.');
+          } else {
+            F.toast((v.mission ? v.mission.name : 'A craft') + ' made it home safely.', 'gold');
+          }
+        }
       } else if (b === W.earth && v.inWater) unlock('splash');
     }
 
@@ -389,18 +496,41 @@
   F.plan = null;
   let replanIn = 0, wasBurning = false;
 
+  /** a target is either a celestial body (from W.bodies) or a live vessel
+      (picked off the map — see R.pickVessel / the vessel chip) */
+  F.isVesselTarget = function (t) { return !!(t && t.parts); };
+
+  F.targetName = function (t) {
+    if (!t) return '';
+    return F.isVesselTarget(t) ? (t.mission ? t.mission.name : describe(t)) : t.name;
+  };
+
+  /** current world position of whatever's targeted, for map drawing */
+  F.targetPos = function (t) {
+    return F.isVesselTarget(t) ? { x: t.x, y: t.y } : W.bodyPos(t, F.t);
+  };
+
   F.setTarget = function (b) {
-    if (!b || b === F.target) { F.target = null; F.plan = null; }
-    else if (b === W.soiBody(F.focus.x, F.focus.y, F.t) && !b.orbit) {
+    if (!b || b === F.target) { F.target = null; F.plan = null; F.paintXfer(); return; }
+    if (F.isVesselTarget(b)) {
+      if (b === F.focus) { F.toast("Can't target your own craft", 'bad'); return; }
+      const d = Math.hypot(b.x - F.focus.x, b.y - F.focus.y);
+      if (d < 5000) { F.toast('You are already at ' + F.targetName(b), 'bad'); return; }
+    } else if (b === W.soiBody(F.focus.x, F.focus.y, F.t) && !b.orbit) {
       F.toast('You are already orbiting ' + b.name, 'bad');
       return;
-    } else F.target = b;
+    }
+    F.target = b;
     F.replan();
   };
 
   F.replan = function () {
     if (!F.target || !F.focus || F.focus.dead) { F.plan = null; F.paintXfer(); return; }
-    F.plan = W.planTransfer(F.focus, F.target, F.t);
+    // a vessel target has no closed-form orbit — hand planTransfer a fresh
+    // propagated snapshot of it each time, since it may have moved since
+    // the last replan
+    const t = F.isVesselTarget(F.target) ? W.vesselTarget(F.target, F.t) : F.target;
+    F.plan = W.planTransfer(F.focus, t, F.t);
     F.paintXfer();
   };
 

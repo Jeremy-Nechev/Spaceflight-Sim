@@ -78,6 +78,50 @@
     };
   };
 
+  /* ═══════════════════ live-flight state (save/resume) ═══════════════════
+     Unlike a blueprint, this captures a vessel exactly as it sits mid-flight:
+     position/velocity, per-part fuel/activation, and which stage it's on —
+     everything needed to pick a paused mission back up unchanged. */
+
+  V.toState = function (v) {
+    return {
+      parts: v.parts.map(p => ({
+        uid: p.uid, id: p.id, x: p.lx, y: p.ly, flip: p.flip,
+        fuel: p.fuel, active: p.active, fired: p.fired,
+        chute: p.chute, chuteOut: p.chuteOut, deployed: p.deployed
+      })),
+      stages: v.stages.map(g => g.slice()),
+      stageIdx: v.stageIdx,
+      x: v.x, y: v.y, vx: v.vx, vy: v.vy, angle: v.angle, omega: v.omega,
+      throttle: v.throttle, sas: v.sas, sasTarget: v.sasTarget,
+      debris: !!v.debris, mission: v.mission || null
+    };
+  };
+
+  V.fromState = function (st) {
+    const parts = [];
+    for (const s of st.parts) {
+      const p = mkPart(s);
+      if (!p) continue;                 // unknown/removed part id — skip, same as fromBlueprint
+      p.fuel = s.fuel; p.active = !!s.active; p.fired = !!s.fired;
+      p.chute = s.chute || 0; p.chuteOut = !!s.chuteOut; p.deployed = !!s.deployed;
+      parts.push(p);
+      V.seedUid(p.uid);
+    }
+    if (!parts.length) return null;
+    const live = new Set(parts.map(p => p.uid));
+    const stages = (st.stages || []).map(g => g.filter(u => live.has(u))).filter(g => g.length);
+    const v = new Vessel(parts, stages.length ? stages : V.autoStages(parts));
+    v.stageIdx = Math.min(st.stageIdx || 0, v.stages.length);
+    v.x = st.x; v.y = st.y; v.vx = st.vx; v.vy = st.vy;
+    v.angle = st.angle; v.omega = st.omega;
+    v.throttle = st.throttle || 0;
+    v.sas = st.sas || 'off'; v.sasTarget = st.sasTarget || 0;
+    v.debris = !!st.debris;
+    v.mission = st.mission || null;
+    return v;
+  };
+
   /* ═══════════════════ stage groups ═══════════════════ */
 
   V.isStageable = function (def) {

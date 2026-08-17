@@ -343,6 +343,13 @@
   }
   W.propagate = propagate;
 
+  /** where `target` sits at time t — a body's closed-form orbit, or a
+      vessel's own propagated track once one has been attached (see
+      W.vesselTarget / sampleTrack, below) */
+  function targetPos(target, t) {
+    return (target.isVessel && target.track) ? target.track.at(t) : W.bodyPos(target, t);
+  }
+
   /** Fly forward and record how close we get to `target`. */
   function flyToward(x, y, vx, vy, t0, target, span, collect) {
     let t = t0, best = Infinity, bestT = t0, hit = false;
@@ -361,7 +368,7 @@
       vx += 0.5 * (ax + g.x) * dt; vy += 0.5 * (ay + g.y) * dt;
       x = nx; y = ny; ax = g.x; ay = g.y;
       if (collect) pts.push(x, y);
-      const tp = W.bodyPos(target, t);
+      const tp = targetPos(target, t);
       const d = Math.hypot(x - tp.x, y - tp.y);
       if (d < best) { best = d; bestT = t; }
       if (d < target.radius) { hit = true; break; }
@@ -370,6 +377,64 @@
       if (pr < W.earth.radius) break;
     }
     return { miss: best, tArrive: bestT, pts, hit };
+  }
+
+  /**
+   * Wrap a live vessel as a transfer target. A vessel has no closed-form
+   * orbit formula the way a body does, so its future position has to come
+   * from propagating its own current (coasting) state — see sampleTrack.
+   * This assumes the target vessel doesn't burn between now and rendezvous,
+   * which is the same assumption any rendezvous planner has to make about
+   * a craft it doesn't control.
+   */
+  W.vesselTarget = function (ves, t0) {
+    return {
+      isVessel: true,
+      name: (ves.mission && ves.mission.name) || 'the other craft',
+      radius: Math.max(8, ves.radius()),
+      soi: 5000,                       // "close enough to call it a rendezvous" bubble
+      x0: ves.x, y0: ves.y, vx0: ves.vx, vy0: ves.vy, t0,
+      track: null
+    };
+  };
+
+  /**
+   * Propagate a target's state once, sampling it at even intervals, so the
+   * numeric refinement in planTransfer (which asks "where's the target?"
+   * dozens of times) doesn't re-integrate from scratch on every query.
+   */
+  function sampleTrack(x, y, vx, vy, t0, span, nSamples) {
+    span = Math.max(span, 1);
+    const dt = span / nSamples;
+    const xs = new Array(nSamples + 1), ys = new Array(nSamples + 1);
+    xs[0] = x; ys[0] = y;
+    const g = { x: 0, y: 0 };
+    W.gravity(x, y, t0, g);
+    let ax = g.x, ay = g.y, t = t0;
+    for (let i = 0; i < nSamples; i++) {
+      let left = dt;
+      while (left > 1e-6) {
+        const b = W.soiBody(x, y, t), bp = W.bodyPos(b, t);
+        const rr = Math.hypot(x - bp.x, y - bp.y);
+        const h = Math.min(left, U.clamp(U.TAU * Math.sqrt((rr * rr * rr) / b.mu) / 200, 0.25, left));
+        const nx = x + vx * h + 0.5 * ax * h * h, ny = y + vy * h + 0.5 * ay * h * h;
+        t += h;
+        W.gravity(nx, ny, t, g);
+        vx += 0.5 * (ax + g.x) * h; vy += 0.5 * (ay + g.y) * h;
+        x = nx; y = ny; ax = g.x; ay = g.y;
+        left -= h;
+      }
+      xs[i + 1] = x; ys[i + 1] = y;
+    }
+    return {
+      t0, dt, xs, ys,
+      at(tq) {
+        const u = U.clamp((tq - t0) / dt, 0, nSamples);
+        const i = Math.min(nSamples - 1, Math.floor(u));
+        const f = u - i;
+        return { x: U.lerp(xs[i], xs[i + 1], f), y: U.lerp(ys[i], ys[i + 1], f) };
+      }
+    };
   }
 
   /**
@@ -383,10 +448,16 @@
    * refined numerically against actual closest approach.
    */
   W.planTransfer = function (v, target, t) {
-    if (!target || !target.orbit) return { ok: false, reason: 'That world has no orbit to aim at.' };
-    const parent = W.byId[target.orbit.parent];
+    if (!target) return { ok: false, reason: 'Pick something to target first.' };
+    if (!target.isVessel && !target.orbit) return { ok: false, reason: 'That world has no orbit to aim at.' };
+    const parent = target.isVessel ? W.soiBody(target.x0, target.y0, t) : W.byId[target.orbit.parent];
     const soi = W.soiBody(v.x, v.y, t);
-    if (soi === target) return { ok: false, reason: 'You are already at ' + target.name + '.' };
+    if (target.isVessel) {
+      const d = Math.hypot(v.x - target.x0, v.y - target.y0);
+      if (d < target.soi) return { ok: false, reason: 'You are already at ' + target.name + '.' };
+    } else if (soi === target) {
+      return { ok: false, reason: 'You are already at ' + target.name + '.' };
+    }
     if (soi !== parent) return { ok: false, reason: 'Escape ' + soi.name + ' first.' };
 
     const el = W.elements(parent, v.x, v.y, v.vx, v.vy, t);
@@ -394,15 +465,22 @@
     if (el.pe < parent.radius + 20000) return { ok: false, reason: 'Get into a stable orbit first.' };
 
     const mu = parent.mu;
-    const r1 = el.a, r2 = target.orbit.a;
+    // a vessel target has no closed-form orbit, so treat its current osculating
+    // ellipse as a stand-in circular orbit for the analytic seed — same
+    // approximation this already leans on for the (near-circular) Moon
+    const elT = target.isVessel
+      ? W.elements(parent, target.x0, target.y0, target.vx0, target.vy0, t)
+      : null;
+    const r1 = el.a, r2 = target.isVessel ? elT.a : target.orbit.a;
     const at = (r1 + r2) / 2;
     const tTrans = Math.PI * Math.sqrt((at * at * at) / mu);
-    const nT = target.orbit.n;
+    const nT = target.isVessel ? Math.sqrt(mu / (r2 * r2 * r2)) : target.orbit.n;
     const nC = Math.sqrt(mu / (r1 * r1 * r1));
     if (Math.abs(nC - nT) < 1e-12) return { ok: false, reason: 'No transfer window exists.' };
 
     // where the target must sit, relative to us, at the moment we burn
-    const pp = W.bodyPos(parent, t), tp = W.bodyPos(target, t);
+    const pp = W.bodyPos(parent, t);
+    const tp = target.isVessel ? { x: target.x0, y: target.y0 } : W.bodyPos(target, t);
     const thC = Math.atan2(v.y - pp.y, v.x - pp.x);
     const thT = Math.atan2(tp.y - pp.y, tp.x - pp.x);
     const phiReq = U.wrap(Math.PI - nT * tTrans);
@@ -414,6 +492,12 @@
     const dv0 = Math.sqrt(mu * (2 / el.r - 1 / at)) - vNow;
     const period = el.period;
     const span = tTrans * 2.2;
+
+    // give a vessel target a propagated position track covering the whole
+    // window search() might probe, so flyToward can just interpolate
+    if (target.isVessel) {
+      target.track = sampleTrack(target.x0, target.y0, target.vx0, target.vy0, t, wait + span, 400);
+    }
 
     // ── refine: propagate once per candidate burn time, then try burn sizes ──
     let best = null;
