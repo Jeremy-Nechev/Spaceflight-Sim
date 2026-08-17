@@ -82,13 +82,19 @@
   function hideMissionBar() {
     const bar = document.getElementById('missionBar');
     if (bar) bar.classList.add('hidden');
+    document.body.classList.remove('hasMissions');
   }
+
+  // scrapping a craft that is still flying takes a confirming second click;
+  // the widget repaints itself twice a second, so which button is armed has to
+  // live out here rather than on the button element itself
+  let armedRecover = null, armedUntil = 0;
 
   function paintMissionBar() {
     const bar = document.getElementById('missionBar');
     if (!bar) return;
     const missions = F.vessels.filter(v => v.mission);
-    if (!missions.length) { bar.classList.add('hidden'); return; }
+    if (!missions.length) { hideMissionBar(); return; }
     bar.classList.remove('hidden');
     bar.innerHTML = '';
     const head = document.createElement('div');
@@ -100,12 +106,14 @@
       row.className = 'missionRow' + (v === F.focus ? ' current' : '');
       const b = v.nearBody || S.world.earth;
       const el = S.world.elements(b, v.x, v.y, v.vx, v.vy, F.t);
-      const status = v.landed ? 'landed on ' + b.name
+      const home = !!(v.landed || v.inWater);
+      const status = home ? (v.inWater ? 'floating on ' : 'landed on ') + b.name
         : (el.e < 1 ? 'orbiting ' + b.name : 'near ' + b.name);
       const fuel = v.fuelGroups ? v.fuelGroups() : [];
       const pct = fuel.length ? Math.round(100 * fuel.reduce((s, g) => s + g.cur, 0) / Math.max(1, fuel.reduce((s, g) => s + g.cap, 0))) : null;
       row.innerHTML = '<span class="mName">' + (v.mission.name || 'Rocket') + '</span>' +
         '<span class="mStat">' + status + (pct != null ? ' · ' + pct + '% fuel' : '') + '</span>';
+
       const btn = document.createElement('button');
       btn.textContent = 'Fly ▶';
       btn.onclick = () => {
@@ -114,8 +122,37 @@
         if (S.audio) S.audio.ui();
       };
       row.appendChild(btn);
+
+      // recovering a craft that is safely down closes the mission out and frees
+      // one of the six mission slots; one that is still flying can be scrapped,
+      // but only on a second click
+      const armed = armedRecover === v.mission.id && Date.now() < armedUntil;
+      const rec = document.createElement('button');
+      rec.className = 'mRec' + (armed ? ' armed' : '');
+      rec.textContent = armed ? 'Sure?' : (home ? '✔ Recover' : '✖ Scrap');
+      rec.title = home
+        ? 'Bring ' + (v.mission.name || 'this craft') + ' home and close the mission'
+        : 'This craft is still flying — scrapping it ends the mission';
+      rec.onclick = () => {
+        if (S.audio) S.audio.ui();
+        if (!home && !armed) {
+          armedRecover = v.mission.id;
+          armedUntil = Date.now() + 3000;
+          paintMissionBar();
+          return;
+        }
+        armedRecover = null;
+        F.recover(v);
+        paintMissionBar();
+        renderProgress();
+      };
+      row.appendChild(rec);
       bar.appendChild(row);
     }
+    // reserve the space the widget occupies so it can't sit on top of the menu
+    // card, the hangar panels or the build hint (see .hasMissions in the CSS)
+    document.body.classList.add('hasMissions');
+    document.body.style.setProperty('--missionH', bar.offsetHeight + 'px');
   }
 
   /* ═══════════════════ loop ═══════════════════ */
@@ -205,6 +242,7 @@
       if (d.engine.solid) s += '<i>solid · no throttle</i>';
     }
     if (d.chute) s += '<i>' + d.chute.area + ' m² canopy</i>';
+    if (d.shield) s += '<i>blocks ' + Math.round(d.shield.prot * 100) + '% of the heating behind it</i>';
     if (d.authority) s += '<i>+' + d.authority.toFixed(2) + ' rad/s² control</i>';
     s += '<em>' + d.desc + '</em>';
     t.innerHTML = s;
@@ -235,7 +273,7 @@
     const warn = [];
     if (!s.count) warn.push('Nothing built yet.');
     else {
-      if (!s.pods) warn.push('⚠ No command pod: no steering.');
+      if (!s.pods) warn.push('⚠ No command pod: no steering, and no staging either.');
       if (!s.engines) warn.push('⚠ No engines.');
       else if (s.twr && s.twr < 1.02) warn.push('⚠ TWR ' + s.twr.toFixed(2) + ' too low: it can\'t lift off.');
       if (B.unassigned().length) warn.push('⚠ ' + B.unassigned().length + ' part(s) in no stage group.');
@@ -425,8 +463,13 @@
     document.getElementById('btnStage').onclick = () => F.stage();
     document.getElementById('xClose').onclick = () => F.setTarget(null);
     document.getElementById('xRecalc').onclick = () => F.replan();
+    document.getElementById('xPro').onclick = e => {
+      F.setSas(e.currentTarget.dataset.sas || 'pro');
+      F.paintXfer();
+    };
     document.getElementById('endRevert').onclick = () => F.revert();
     document.getElementById('endBuild').onclick = () => { F.hideEnd(); setScene('build'); };
+    document.getElementById('endMenu').onclick = () => { F.hideEnd(); setScene('menu'); };
 
     // throttle slider
     const bar = document.getElementById('throttleBar');

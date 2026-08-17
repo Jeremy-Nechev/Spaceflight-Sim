@@ -13,11 +13,24 @@
   const ORDER = S.PART_ORDER = [];
   const CATS = S.PART_CATS = ['Command', 'Tanks', 'Engines', 'Aero', 'Struct'];
 
+  /**
+   * How much friction heating a part shrugs off before it burns away, in the
+   * same units as the accumulated `temp` physics.js tracks. Roughly: 1.0 ≈
+   * survives a normal return from low orbit facing the airflow head-on. A pod
+   * has a bit of built-in shielding (it's drawn with one); an ablative heat
+   * shield takes many times as much and protects whatever hides behind it.
+   */
+  const HEAT_TOL = {
+    pod: 1.3, shield: 9, nose: 1.15, tank: 1.0, engine: 1.15, adapter: 1.0,
+    fin: 0.85, chute: 0.8, leg: 0.85, sep: 0.9, coupler: 0.95, rcs: 0.8
+  };
+
   function add(d) {
     d.radial = !!d.radial;
     d.mass = d.mass || 0;
     d.fuel = d.fuel || 0;
     d.cd = d.cd == null ? 1.1 : d.cd;
+    d.heatTol = d.heatTol == null ? (HEAT_TOL[d.type] || 1) : d.heatTol;
     PARTS[d.id] = d;
     ORDER.push(d.id);
   }
@@ -305,6 +318,41 @@
     }
   }
 
+  /**
+   * Ablative heat shield — a shallow dish that takes the friction heating on
+   * its own face so the stack behind it doesn't. The exposed side chars and
+   * then glows as it soaks up heat (see `st.temp`, kept by physics.js).
+   */
+  function drawShield(ctx, st, d) {
+    const w = d.w, h = d.h;
+    const hot = U.clamp(((st && st.temp) || 0) / 0.5, 0, 1);
+    ctx.beginPath();
+    ctx.moveTo(-w / 2, h / 2);
+    ctx.lineTo(w / 2, h / 2);
+    ctx.lineTo(w / 2, -h * 0.15);
+    ctx.quadraticCurveTo(0, -h * 1.25, -w / 2, -h * 0.15);
+    ctx.closePath();
+    ctx.fillStyle = cyl(ctx, w, '#7a6250', '#544234', '#2e241d');
+    ctx.fill();
+    ink(ctx, w);
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(-w / 2, h * 0.08);
+    ctx.lineTo(w / 2, h * 0.08);
+    ctx.lineTo(w / 2, -h * 0.15);
+    ctx.quadraticCurveTo(0, -h * 1.25, -w / 2, -h * 0.15);
+    ctx.closePath();
+    ctx.clip();
+    ctx.fillStyle = U.mix('#3a2d24', '#ff7326', hot);
+    ctx.fillRect(-w / 2, -h * 1.3, w, h * 1.5);
+    if (hot > 0.18) {
+      ctx.fillStyle = 'rgba(255,226,160,' + (0.55 * hot).toFixed(3) + ')';
+      ctx.fillRect(-w / 2, -h * 1.3, w, h * 0.62);
+    }
+    ctx.restore();
+    band(ctx, w, h / 2 - 0.07, 0.14);
+  }
+
   /** vertical coupler — in-line truss that rigidly joins two stacks */
   function drawVCoup(ctx, st, d) {
     const w = d.w, h = d.h, pt = h * 0.24;
@@ -512,6 +560,24 @@
     id: 'chute_l', name: 'Big Chute', cat: 'Aero', type: 'chute', w: 2, h: 1.2, mass: 210, cd: 0.9,
     chute: { area: 700, cd: 1.3, width: 17, riser: 9 },
     desc: 'For heavy capsules coming home hot.', draw: drawChute
+  });
+  add({
+    id: 'shield_s', name: 'Heat Shield S', cat: 'Aero', type: 'shield',
+    w: 1.3, h: 0.45, mass: 110, cd: 1.3, shield: { prot: 0.88 },
+    desc: 'Ablative dish. Bolt it under a Mk1 pod and come back down blunt-end first.',
+    draw: drawShield
+  });
+  add({
+    id: 'shield_m', name: 'Heat Shield M', cat: 'Aero', type: 'shield',
+    w: 2.4, h: 0.6, mass: 300, cd: 1.3, shield: { prot: 0.90 },
+    desc: 'Shields a medium stack. Re-enter retrograde so it faces the airflow.',
+    draw: drawShield
+  });
+  add({
+    id: 'shield_l', name: 'Heat Shield L', cat: 'Aero', type: 'shield',
+    w: 4.4, h: 0.8, mass: 720, cd: 1.3, shield: { prot: 0.92 },
+    desc: 'Big ablative shield for a heavy craft returning from the Moon.',
+    draw: drawShield
   });
 
   /* ═══════════════════ STRUCTURE ═══════════════════ */

@@ -33,7 +33,8 @@
       fuel: def.fuel > 0 ? (spec.fuel == null ? 1 : spec.fuel) : 0,
       active: false, fired: false, chute: 0, chuteOut: false,
       deployed: def.type === 'leg',
-      comp: 0, throttle: 0
+      comp: 0, throttle: 0,
+      temp: 0                    // accumulated friction heat (see physics.js)
     };
   }
 
@@ -88,7 +89,8 @@
       parts: v.parts.map(p => ({
         uid: p.uid, id: p.id, x: p.lx, y: p.ly, flip: p.flip,
         fuel: p.fuel, active: p.active, fired: p.fired,
-        chute: p.chute, chuteOut: p.chuteOut, deployed: p.deployed
+        chute: p.chute, chuteOut: p.chuteOut, deployed: p.deployed,
+        temp: p.temp
       })),
       stages: v.stages.map(g => g.slice()),
       stageIdx: v.stageIdx,
@@ -105,6 +107,7 @@
       if (!p) continue;                 // unknown/removed part id — skip, same as fromBlueprint
       p.fuel = s.fuel; p.active = !!s.active; p.fired = !!s.fired;
       p.chute = s.chute || 0; p.chuteOut = !!s.chuteOut; p.deployed = !!s.deployed;
+      p.temp = s.temp || 0;
       parts.push(p);
       V.seedUid(p.uid);
     }

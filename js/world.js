@@ -261,6 +261,10 @@
     const pts = [];
     const g = { x: 0, y: 0 };
     let t = t0, hit = null, escape = false;
+    // optional { posAt(t) } — how close the path we are actually on comes to
+    // whatever is targeted, so the transfer panel can report it live
+    const watch = opts.watch || null;
+    const closest = watch ? { d: Infinity, t: t0 } : null;
 
     const sx = x, sy = y;
     let closed = false, travelled = 0, lastStep = 0;
@@ -295,6 +299,12 @@
       const rp = W.bodyPos(ref, t);
       pts.push(x - rp.x, y - rp.y);
 
+      if (watch) {
+        const wp = watch.posAt(t);
+        const wd = Math.hypot(x - wp.x, y - wp.y);
+        if (wd < closest.d) { closest.d = wd; closest.t = t; }
+      }
+
       // impact?
       for (let k = 0; k < W.bodies.length; k++) {
         const cb = W.bodies[k], cp = W.bodyPos(cb, t);
@@ -315,7 +325,7 @@
       if (Math.hypot(x, y) > MOON.orbit.a * 14) { escape = true; break; }
     }
 
-    return { pts, ref, refNow, hit, closed, escape, span: t - t0 };
+    return { pts, ref, refNow, hit, closed, escape, span: t - t0, closest };
   };
 
   /* ═══════════════════ transfer planning ═══════════════════ */
@@ -474,18 +484,32 @@
     const r1 = el.a, r2 = target.isVessel ? elT.a : target.orbit.a;
     const at = (r1 + r2) / 2;
     const tTrans = Math.PI * Math.sqrt((at * at * at) / mu);
-    const nT = target.isVessel ? Math.sqrt(mu / (r2 * r2 * r2)) : target.orbit.n;
-    const nC = Math.sqrt(mu / (r1 * r1 * r1));
+    // signed mean motions: a craft going round the wrong way has a *negative*
+    // rate, and using an unsigned one puts the window half a synodic period out
+    const nT = target.isVessel
+      ? (elT.h < 0 ? -1 : 1) * Math.sqrt(mu / (r2 * r2 * r2))
+      : target.orbit.n;
+    const nC = (el.h < 0 ? -1 : 1) * Math.sqrt(mu / (r1 * r1 * r1));
     if (Math.abs(nC - nT) < 1e-12) return { ok: false, reason: 'No transfer window exists.' };
 
-    // where the target must sit, relative to us, at the moment we burn
+    // Where the target must sit, relative to us, at the moment we burn. The
+    // craft arrives half a transfer ellipse later — i.e. at the point opposite
+    // the burn — so the target has to be that far ahead, less however far it
+    // travels while we're on the way.
+    //
+    // The gap φ = θtarget − θcraft closes at (nT − nC), so the wait to reach
+    // the required φ divides by *that*, not by (nC − nT): with the sign the
+    // other way up the seed lands a synodic half-period off, and the numeric
+    // refinement then polishes a window that was never the right one — which
+    // is why a third of Moon transfers used to arrive hundreds of kilometres
+    // wide of the intended pass.
     const pp = W.bodyPos(parent, t);
     const tp = target.isVessel ? { x: target.x0, y: target.y0 } : W.bodyPos(target, t);
     const thC = Math.atan2(v.y - pp.y, v.x - pp.x);
     const thT = Math.atan2(tp.y - pp.y, tp.x - pp.x);
     const phiReq = U.wrap(Math.PI - nT * tTrans);
-    const syn = U.TAU / Math.abs(nC - nT);
-    let wait = U.wrap(phiReq - U.wrap(thT - thC)) / (nC - nT);
+    const syn = U.TAU / Math.abs(nT - nC);
+    let wait = U.wrap(phiReq - U.wrap(thT - thC)) / (nT - nC);
     while (wait < 0) wait += syn;
 
     // A vessel sitting in a near-identical orbit (nC≈nT — the natural case
@@ -521,7 +545,15 @@
     // better than the near-null "Hohmann" the seed suggests. Floor it, for
     // vessel targets only, so body/Moon transfers keep their existing,
     // already-tuned behaviour untouched.
-    const dvSpread0 = target.isVessel ? Math.max(dv0 * 0.18, vNow * 0.02, 2) : dv0 * 0.18;
+    // An eccentric starting orbit needs a wider net on both axes: the burn size
+    // that reaches the target depends on *where* in the orbit it happens (a
+    // kick at periapsis buys far more apoapsis than the same kick higher up),
+    // so the seed — which treats the orbit as a circle of radius `a` — is only
+    // a rough guide, and a spread tuned for a circle misses the good burns.
+    const eccK = U.clamp(el.e / 0.1, 0, 1);
+    const dvSpread0 = target.isVessel
+      ? Math.max(dv0 * 0.18, vNow * 0.02, 2)
+      : dv0 * (0.18 + 0.42 * eccK);
     // Near-resonant orbits (nC≈nT — a co-orbital rendezvous, the single most
     // common real vessel-target case) can genuinely need a wait spanning a
     // large slice of the synodic period before the phase lines up, since a
@@ -530,10 +562,14 @@
     // near enough. Widen toward the synodic period itself when it's
     // meaningfully larger than the craft's own orbit, capped so the coarse
     // grid doesn't get so sparse it stops resolving anything.
+    // ...and, for the same reason, an eccentric orbit gets the whole lap in
+    // play (half a period either way) instead of a third of it, with extra
+    // grid points so widening the window doesn't just coarsen it.
     const tSpread0 = target.isVessel
       ? Math.max(period * 0.35, Math.min(syn * 0.5, period * 8))
-      : period * 0.35;
-    const nT0 = target.isVessel ? 21 : 11, nD0 = target.isVessel ? 15 : 9;
+      : period * (0.35 + 0.15 * eccK);
+    const nT0 = target.isVessel ? 21 : (11 + Math.round(6 * eccK));
+    const nD0 = target.isVessel ? 15 : (9 + Math.round(4 * eccK));
 
     // Give a vessel target a propagated position track covering the whole
     // window search() might probe, so flyToward can just interpolate.
@@ -554,6 +590,15 @@
       target.track = sampleTrack(target.x0, target.y0, target.vx0, target.vy0, t, trackSpan, samples);
     }
 
+    // How close we actually want to pass. Driving the miss distance to zero
+    // aims the craft at the centre of the target — i.e. straight into the
+    // ground — which is a rotten default: arriving in a low orbit is both what
+    // a player normally wants and what the mission log rewards, and you can
+    // always burn retrograde from orbit to land afterwards. So aim a little
+    // above the surface and let the search hit *that*. A rendezvous with
+    // another craft still wants to get as close as it can.
+    const wantMiss = target.isVessel ? 0 : target.radius * 1.28;
+
     // ── refine: propagate once per candidate burn time, then try burn sizes ──
     let best = null;
     const search = (centreT, tSpread, dvCentre, dvSpread, nT_, nD) => {
@@ -567,13 +612,26 @@
           const dv = dvCentre + dvSpread * (nD === 1 ? 0 : (k / (nD - 1) - 0.5) * 2);
           if (dv <= 0) continue;
           const r = flyToward(st.x, st.y, st.vx + ux * dv, st.vy + uy * dv, tB, target, span, false);
-          if (!best || r.miss < best.miss) {
-            best = { miss: r.miss, dv, tBurn: tB, tArrive: r.tArrive, hit: r.hit, st, ux, uy };
+          const err = Math.abs(r.miss - wantMiss);
+          if (!best || err < best.err) {
+            best = { err, miss: r.miss, dv, tBurn: tB, tArrive: r.tArrive, hit: r.hit, st, ux, uy };
           }
         }
       }
     };
     search(t + wait, tSpread0, dv0, dvSpread0, nT0, nD0);
+    // A coarse grid can settle into a poor corner of one window — a grazing
+    // pass, or an arrival that only clips the edge of the sphere of influence.
+    // When it clearly has, spend the same effort on the next window round and
+    // keep whichever came out better, rather than handing back the bad one.
+    // (Vessel targets sit this out: their sampled position track only covers
+    // the first window, so probing past it would be measuring a frozen target.)
+    if (!target.isVessel && (!best || best.err > wantMiss * 0.4)) {
+      const first = best;
+      best = null;
+      search(t + wait + syn, tSpread0, dv0, dvSpread0, nT0, nD0);
+      if (first && (!best || first.err < best.err)) best = first;
+    }
     if (best) search(best.tBurn, period * 0.07, best.dv, Math.max(best.dv * 0.05, dvSpread0 * 0.1), 7, 7);
     if (best) search(best.tBurn, period * 0.015, best.dv, Math.max(best.dv * 0.012, dvSpread0 * 0.02), 5, 5);
     if (!best) return { ok: false, reason: 'Could not find a transfer from this orbit.' };
@@ -591,9 +649,72 @@
       travel: best.tArrive - best.tBurn,
       miss: shot.miss,
       periapsis: shot.miss - target.radius,
+      wantAlt: wantMiss - target.radius,
       intercept: shot.miss < target.soi,
       burnX: best.st.x, burnY: best.st.y,
       pts: shot.pts
+    };
+  };
+
+  /**
+   * Mid-course correction.
+   *
+   * Once the injection burn is done and the craft is on its way, a fresh
+   * Hohmann plan is worse than useless — it describes a burn from an orbit the
+   * craft is no longer in, at a window days away. What a player actually needs
+   * then is the small nudge that moves the arrival to where they wanted it, so
+   * this sweeps prograde/retrograde kicks applied *now* and keeps the one whose
+   * closest approach lands nearest the intended pass.
+   *
+   * Returns a plan in the same shape as planTransfer, flagged `correction`.
+   */
+  W.planCorrection = function (v, target, t) {
+    if (!target) return null;
+    const wantMiss = target.isVessel ? 0 : target.radius * 1.28;
+    const soi = target.isVessel ? (target.soi || 5000) : (target.soi || target.radius * 3);
+    // look ahead one full lap of whatever path the craft is on now — the pass
+    // we are trying to move has to happen inside that
+    const elNow = W.elements(W.soiBody(v.x, v.y, t), v.x, v.y, v.vx, v.vy, t);
+    const span = U.clamp(isFinite(elNow.period) ? elNow.period * 1.1 : 12 * 3600,
+      3 * 3600, 3 * 24 * 3600);
+
+    if (target.isVessel && !target.track) {
+      target.track = sampleTrack(target.x0, target.y0, target.vx0, target.vy0, t, span, 900);
+    }
+
+    const sp = Math.hypot(v.vx, v.vy);
+    if (sp < 1) return null;
+    const ux = v.vx / sp, uy = v.vy / sp;
+
+    let best = null;
+    const sweep = (centre, spread, n) => {
+      for (let i = 0; i < n; i++) {
+        const dv = centre + spread * (n === 1 ? 0 : (i / (n - 1) - 0.5) * 2);
+        const r = flyToward(v.x, v.y, v.vx + ux * dv, v.vy + uy * dv, t, target, span, false);
+        const err = Math.abs(r.miss - wantMiss);
+        if (!best || err < best.err) best = { err, dv, miss: r.miss, tArrive: r.tArrive };
+      }
+    };
+    sweep(0, 70, 29);
+    if (best) sweep(best.dv, 6, 9);
+    if (best) sweep(best.dv, 0.9, 7);
+    if (!best) return null;
+
+    // keep the *current* pass too, so the caller can say whether burning helps
+    const now = flyToward(v.x, v.y, v.vx, v.vy, t, target, span, false);
+
+    return {
+      ok: true, correction: true, target,
+      dv: Math.abs(best.dv), retro: best.dv < 0,
+      tBurn: t, wait: 0,
+      travel: best.tArrive - t,
+      miss: best.miss,
+      periapsis: best.miss - target.radius,
+      wantAlt: wantMiss - target.radius,
+      nowPeriapsis: now.miss - target.radius,
+      intercept: best.miss < soi,
+      burnX: v.x, burnY: v.y,
+      pts: null
     };
   };
 

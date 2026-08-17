@@ -27,6 +27,19 @@
   // weathervaning moment is softened, and fins still point the nose forward.
   const AERO_TQ = 0.30;
 
+  /* ── friction heating ──
+     Stagnation heating goes as ρ·v³, balanced against radiative cooling, so a
+     part settles at a heat level set by how fast it is ploughing through how
+     much air. Measured against real descents and tuned so that: a capsule
+     barely warms up (a light, blunt thing slows down high, where the air is
+     thin); a whole stack coming back from low orbit glows and gets a warning
+     but survives; and a stack returning from the Moon, or diving steeply into
+     thick air, starts shedding fins and engines. A shield in front drops
+     everything behind it to a couple of percent of that. */
+  const HEAT_K = 3.4e-10;
+  const HEAT_COOL = 0.08;      // per second, proportional to the heat held
+  const HEAT_SHADOW = 0.18;    // share taken by a part tucked behind another
+
   const _g = { x: 0, y: 0 };
   const _wp = { x: 0, y: 0 };
   const _vp = { x: 0, y: 0 };
@@ -371,6 +384,80 @@
     v.nearBody = near;
     v.altASL = altASL;
     v.atmoF = atmoF;
+
+    /* ── friction heating (can burn parts clean off) ── */
+    applyHeat(v, rho, speed, dt);
+  }
+
+  /* ═══════════════════ re-entry heating ═══════════════════ */
+
+  /**
+   * Every part carries its own accumulated heat. The parts actually facing the
+   * airflow take the brunt of it; anything tucked behind another part takes a
+   * fraction, and anything hiding behind a heat shield takes almost none. Run
+   * a part past its tolerance and it burns away — and if that was the last
+   * command pod, the craft is lost with it.
+   */
+  function applyHeat(v, rho, speed, dt) {
+    const ps = v.parts;
+    const flux = (rho > 1e-7 && speed > 40) ? rho * speed * speed * speed * HEAT_K : 0;
+
+    if (flux > 0) {
+      // the direction the air arrives from, in the craft's own axes
+      const ca = Math.cos(v.angle), sa = Math.sin(v.angle);
+      const sp = Math.hypot(v.vx, v.vy) || 1;
+      const ux = (v.vx * ca + v.vy * sa) / sp;
+      const uy = (-v.vx * sa + v.vy * ca) / sp;
+      const px = -uy, py = ux;                     // across the flow
+      for (const p of ps) {
+        const ax = p.lx - v.com.x, ay = p.ly - v.com.y;
+        p._hs = ax * ux + ay * uy;                 // how far upstream it sits
+        p._hq = ax * px + ay * py;                 // offset across the flow
+        // exact half-extent of an axis-aligned box measured across the flow
+        p._hx = 0.5 * (p.def.w * Math.abs(px) + p.def.h * Math.abs(py));
+      }
+      for (const p of ps) {
+        let shade = 1, prot = 0;
+        for (const o of ps) {
+          if (o === p || o._hs <= p._hs + 0.05) continue;             // not in front
+          if (Math.abs(o._hq - p._hq) > o._hx + p._hx) continue;      // not in the way
+          shade = HEAT_SHADOW;
+          if (o.def.shield) prot = Math.max(prot, o.def.shield.prot);
+        }
+        p.temp += flux * shade * (1 - prot) * dt;
+      }
+    }
+
+    let worst = 0, hottest = 0, cooked = null;
+    for (const p of ps) {
+      p.temp = Math.max(0, p.temp - HEAT_COOL * p.temp * dt);
+      const f = p.temp / p.def.heatTol;
+      if (f > worst) worst = f;
+      if (p.temp > hottest) hottest = p.temp;
+      if (f >= 1) (cooked = cooked || []).push(p);
+    }
+    v.heatFrac = worst;
+    v.heatGlow = hottest;
+    if (flux > 0 && hottest > 0.08 && S.fx) S.fx.reentry(v, U.clamp(hottest / 0.6, 0, 1), dt);
+    if (cooked) for (const p of cooked) burnOff(v, p);
+  }
+
+  /** a part cooks off: it is gone, and losing the last pod takes the craft */
+  function burnOff(v, p) {
+    const podsLeft = v.parts.some(q => q !== p && q.def.type === 'pod');
+    v.worldOf(p, _wp);
+    const i = v.parts.indexOf(p);
+    if (i >= 0) v.parts.splice(i, 1);
+    if (S.fx) {
+      S.fx.puff(_wp.x, _wp.y, Math.max(1.5, p.def.w * 2));
+      if (v.mission) S.fx.note(p.def.name + ' burned away!', 'bad');
+    }
+    if (S.audio) S.audio.boom(0.5);
+    if (!v.parts.length || (p.def.type === 'pod' && !podsLeft)) {
+      v.crash = 'burned up in the atmosphere';
+    }
+    v._dirty = true; v._aero = null; v._radius = null;
+    v.updateMass();
   }
 
   /* ═══════════════════ water ═══════════════════ */
@@ -555,27 +642,171 @@
 
   /* ═══════════════════ on-rails advance (high time warp) ═══════════════════ */
 
-  /** Keplerian-ish coast: gravity only, no aero, no contact. */
-  PH.coast = function (v, dt, t, substeps) {
-    const n = substeps || 8;
-    const h = dt / n;
-    let ax, ay;
-    W.gravity(v.x, v.y, t, _g); ax = _g.x; ay = _g.y;
-    for (let i = 0; i < n; i++) {
-      const nx = v.x + v.vx * h + 0.5 * ax * h * h;
-      const ny = v.y + v.vy * h + 0.5 * ay * h * h;
-      W.gravity(nx, ny, t + h * (i + 1), _g);
-      v.vx += 0.5 * (ax + _g.x) * h;
-      v.vy += 0.5 * (ay + _g.y) * h;
-      v.x = nx; v.y = ny;
-      ax = _g.x; ay = _g.y;
-    }
+  /** one velocity-Verlet gravity step — no aero, no contact */
+  function coastStep(v, h, t) {
+    W.gravity(v.x, v.y, t, _g);
+    const ax = _g.x, ay = _g.y;
+    const nx = v.x + v.vx * h + 0.5 * ax * h * h;
+    const ny = v.y + v.vy * h + 0.5 * ay * h * h;
+    W.gravity(nx, ny, t + h, _g);
+    v.vx += 0.5 * (ax + _g.x) * h;
+    v.vy += 0.5 * (ay + _g.y) * h;
+    v.x = nx; v.y = ny;
+  }
+
+  function coastEnd(v, dt, t) {
     v.angle = U.wrap(v.angle + v.omega * dt);
     v.updateMass();
     v.nearBody = nearestBody(v.x, v.y, t);
     v.altASL = W.altitudeASL(W.earth, v.x, v.y, t);
     v.atmoF = 0;
     v.liveThrust = 0;
+  }
+
+  /**
+   * Rails advance for the whole fleet at once.
+   *
+   * A warp substep can be minutes long, which moves a craft hundreds of
+   * kilometres — far too coarse for the hull-level contact test used at 1×, so
+   * craft used to sail straight through each other (and through worlds) the
+   * moment the clock was wound forward. Collisions here are *swept* instead:
+   * two craft touch if the closest approach of their two motion segments falls
+   * inside their combined radii, and the same sweep against each world's
+   * terrain catches a re-entry that would otherwise have been skipped over.
+   */
+  PH.rails = function (vessels, dt, t, minSteps) {
+    // Substep from the geometry, not from a fixed count. A frame at top warp
+    // is a quarter of an hour of flight: chop that into ten and a craft in low
+    // orbit is being integrated twenty times per lap, which bleeds enough
+    // accuracy to turn a carefully aimed lunar pass into a clean miss. Sizing
+    // each step against the local orbital timescale keeps steps fine where the
+    // path bends hard and lets them stretch out on the long coast between.
+    let tc = Infinity;
+    for (const v of vessels) {
+      if (v.dead || v.crash || v.landed) continue;
+      const b = W.soiBody(v.x, v.y, t), bp = W.bodyPos(b, t);
+      const rr = Math.max(1, Math.hypot(v.x - bp.x, v.y - bp.y));
+      tc = Math.min(tc, U.TAU * Math.sqrt((rr * rr * rr) / b.mu));
+    }
+    const n = isFinite(tc)
+      ? U.clamp(Math.ceil(dt / Math.max(0.5, tc / 120)), minSteps || 1, 240)
+      : (minSteps || 10);
+    const h = dt / n;
+    for (let i = 0; i < n; i++) {
+      const t0 = t + h * i, t1 = t0 + h;
+      for (const v of vessels) {
+        if (v.dead || v.crash) continue;
+        v._px = v.x; v._py = v.y; v._pvx = v.vx; v._pvy = v.vy;
+        // a craft sitting on the ground rides along with its world rather than
+        // free-falling through it while the clock is wound forward
+        if (v.landed && v.nearBody && v.nearBody.orbit) {
+          const p0 = W.bodyPos(v.nearBody, t0), p1 = W.bodyPos(v.nearBody, t1);
+          const bv = W.bodyVel(v.nearBody, t1);
+          v.x += p1.x - p0.x; v.y += p1.y - p0.y;
+          v.vx = bv.x; v.vy = bv.y;
+          continue;
+        }
+        if (v.landed) continue;
+        coastStep(v, h, t0);
+      }
+      railsCollide(vessels, t1, h);
+      railsGround(vessels, t1);
+    }
+    for (const v of vessels) {
+      if (v.dead) continue;
+      coastEnd(v, dt, t + dt);
+    }
   };
+
+  /**
+   * Closest approach between two craft over one warp substep.
+   *
+   * A straight line between the substep's endpoints is nowhere near good
+   * enough here: over a minute of orbital motion the chord cuts tens of metres
+   * inside the real arc, which dwarfs a craft only a few metres across, so real
+   * hits get missed and clean misses get flagged. Interpolating the *relative*
+   * motion with a cubic Hermite (both endpoints' positions and velocities)
+   * tracks the true arc to within centimetres; a coarse scan then a ternary
+   * search pins down where the two are actually closest.
+   */
+  const _rel = { x: 0, y: 0 };
+  function relAt(s, r, h, out) {
+    const s2 = s * s, s3 = s2 * s;
+    const h00 = 2 * s3 - 3 * s2 + 1, h10 = s3 - 2 * s2 + s;
+    const h01 = -2 * s3 + 3 * s2, h11 = s3 - s2;
+    out.x = h00 * r.x0 + h10 * h * r.vx0 + h01 * r.x1 + h11 * h * r.vx1;
+    out.y = h00 * r.y0 + h10 * h * r.vy0 + h01 * r.y1 + h11 * h * r.vy1;
+    return out;
+  }
+
+  function closestApproach(a, b, h) {
+    const r = {
+      x0: a._px - b._px, y0: a._py - b._py,
+      vx0: a._pvx - b._pvx, vy0: a._pvy - b._pvy,
+      x1: a.x - b.x, y1: a.y - b.y,
+      vx1: a.vx - b.vx, vy1: a.vy - b.vy
+    };
+    const at = s => { relAt(s, r, h, _rel); return Math.hypot(_rel.x, _rel.y); };
+    const N = 12;
+    let bi = 0, bd = Infinity;
+    for (let i = 0; i <= N; i++) {
+      const d = at(i / N);
+      if (d < bd) { bd = d; bi = i; }
+    }
+    let lo = Math.max(0, (bi - 1) / N), hi = Math.min(1, (bi + 1) / N);
+    for (let k = 0; k < 40 && hi - lo > 1e-9; k++) {
+      const m1 = lo + (hi - lo) / 3, m2 = hi - (hi - lo) / 3;
+      if (at(m1) < at(m2)) hi = m2; else lo = m1;
+    }
+    return Math.min(bd, at((lo + hi) / 2));
+  }
+
+  function railsCollide(vessels, t, h) {
+    for (let i = 0; i < vessels.length; i++) {
+      const a = vessels[i];
+      if (a.dead || a.crash || a._px == null || t < a.noHitUntil) continue;
+      const trA = Math.hypot(a.x - a._px, a.y - a._py);
+      for (let j = i + 1; j < vessels.length; j++) {
+        const b = vessels[j];
+        if (b.dead || b.crash || b._px == null || t < b.noHitUntil) continue;
+        const rr = a.radius() + b.radius();
+        // conservative reject: neither can close by more than the two path
+        // lengths put together, so this skips essentially every pair
+        const trav = trA + Math.hypot(b.x - b._px, b.y - b._py);
+        if (Math.hypot(a._px - b._px, a._py - b._py) > rr + trav) continue;
+        if (closestApproach(a, b, h) > rr) continue;
+        const rel = Math.hypot(a.vx - b.vx, a.vy - b.vy);
+        // a gentle drift-past is survivable at 1×, so it is survivable here too
+        if (rel <= Math.min(a.crashSpeed(), b.crashSpeed())) continue;
+        const msg = 'was struck by another craft at ' + rel.toFixed(0) + ' m/s';
+        a.crash = a.crash || msg;
+        b.crash = b.crash || msg;
+      }
+    }
+  }
+
+  function railsGround(vessels, t) {
+    for (const v of vessels) {
+      if (v.dead || v.crash || v.landed || v._px == null) continue;
+      for (const b of W.bodies) {
+        const bp = W.bodyPos(b, t);
+        const x0 = v._px - bp.x, y0 = v._py - bp.y;
+        const x1 = v.x - bp.x, y1 = v.y - bp.y;
+        const dx = x1 - x0, dy = y1 - y0;
+        const dd = dx * dx + dy * dy;
+        let s = dd > 1e-9 ? -(x0 * dx + y0 * dy) / dd : 0;
+        s = U.clamp(s, 0, 1);
+        const cx = x0 + dx * s, cy = y0 + dy * s;      // deepest point of the sweep
+        const r = Math.hypot(cx, cy);
+        if (r > b.radius + 4000) continue;             // no terrain reaches that high
+        if (r >= W.terrain(b, Math.atan2(cy, cx))) continue;
+        const bv = W.bodyVel(b, t);
+        const rel = Math.hypot(v.vx - bv.x, v.vy - bv.y);
+        if (rel <= v.crashSpeed()) continue;           // a soft arrival, not a crash
+        v.crash = 'flew into ' + b.name + ' at ' + rel.toFixed(0) + ' m/s under time warp';
+        break;
+      }
+    }
+  }
 
 })(window.SFS);

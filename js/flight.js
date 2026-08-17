@@ -29,9 +29,13 @@
   F.el = null;
 
   let predTimer = 0, hudTimer = 0, smashCount = 0;
-  let pendingEnd = null;                  // { title, text, delay } — holds the mission-failed panel back while the wreck burns
+  let pendingEnd = null;                  // { title, text, delay, wreck } — holds the destroyed panel back while the wreck burns
   let echoVessels = [];                   // spent stages still burning after separation, kept audible until off screen
   let inAtmo = null;                      // null = not tracking yet; true/false once we know, so we can toast on the flip
+  let wreckFocus = null;                  // a destroyed craft the camera deliberately stays with (see cleanup)
+  let pinned = null;                      // the craft the player last chose to fly — debris included
+  let burn = null;                        // { need, done } while the plotted transfer burn is actually running
+  let approachSet = false;                // does the path we're on already reach the target?
 
   // whether the flight scene is actually on screen — the sim itself keeps
   // running regardless (background missions), but there's no point painting
@@ -141,6 +145,10 @@
     pendingEnd = null;
     echoVessels = [];
     inAtmo = null;
+    wreckFocus = null;
+    pinned = null;
+    burn = null;
+    approachSet = false;
     F.target = null;
     F.plan = null;
 
@@ -200,11 +208,41 @@
     hideEnd();
   };
 
+  /**
+   * Close a mission out for good — the way to clear a finished flight (and
+   * free one of the MAX_MISSIONS slots) without having to crash it. Offered
+   * from the active-missions widget on the menu and in the hangar.
+   */
+  F.recover = function (v) {
+    if (!v) return false;
+    const name = (v.mission && v.mission.name) || describe(v);
+    const home = !!(v.landed || v.inWater);
+    const i = F.vessels.indexOf(v);
+    if (i >= 0) F.vessels.splice(i, 1);
+    if (F.target === v) { F.target = null; F.plan = null; F.paintXfer(); }
+    if (v === wreckFocus) { wreckFocus = null; pendingEnd = null; }
+    if (v === pinned) pinned = null;
+    if (v === F.focus) {
+      F.focus = F.vessels.find(x => x.mission && x.hasControl()) || F.vessels[0] || null;
+      if (F.focus) {
+        F.refreshStages();
+        syncSasButtons(F.focus.sas);
+        F.syncThrottle();
+        F.predict(true);
+      }
+    }
+    if (!F.vessels.length) { F.running = false; F.over = null; }
+    F.toast(home ? 'Recovered ' + name : name + ' was scrapped in flight',
+      home ? 'gold' : 'bad');
+    F.saveGame();
+    return true;
+  };
+
   /* ═══════════════════ staging ═══════════════════ */
 
   F.stage = function (idx) {
     const v = F.focus;
-    if (!v || v.dead || F.over) return;
+    if (!v || v.dead || F.over || !v.hasControl()) return;
     if (idx != null) {
       // jump straight to a chosen group
       if (idx < v.stageIdx || idx >= v.stages.length) return;
@@ -243,7 +281,8 @@
   /* ═══════════════════ controls ═══════════════════ */
 
   F.setThrottle = function (t) {
-    if (F.focus) F.focus.throttle = U.clamp(t, 0, 1);
+    const v = F.focus;
+    if (v && v.hasControl()) v.throttle = U.clamp(t, 0, 1);
     F.syncThrottle();
   };
 
@@ -266,11 +305,28 @@
 
   F.setSas = function (mode) {
     const v = F.focus;
-    if (!v) return;
+    if (!v || !v.hasControl()) return;
     v.sas = mode;
     if (mode !== 'off') v.sasTarget = v.angle;
     syncSasButtons(mode);
   };
+
+  /**
+   * Debris — a spent stage, or any piece with no command pod — can be flown
+   * along with: the camera follows it and the map draws its path. It has no
+   * brain, though, so every control is dead. Grey them out rather than leaving
+   * buttons that quietly do nothing.
+   */
+  function syncControlLock() {
+    const v = F.focus;
+    const locked = !!v && !v.hasControl();
+    const ctr = document.getElementById('controls');
+    const sas = document.getElementById('sasWrap');
+    const note = document.getElementById('noCtrl');
+    if (ctr) ctr.classList.toggle('locked', locked);
+    if (sas) sas.classList.toggle('locked', locked);
+    if (note) note.classList.toggle('hidden', !locked);
+  }
 
   F.cycleSas = function () {
     const order = ['off', 'hold', 'pro', 'retro', 'up'];
@@ -292,22 +348,42 @@
     const v = F.focus;
     if (!v) return 0;
     const onRailsOk = v.altASL > 62000 && !v.landed && !v.touching && (v.liveThrust || 0) <= 0;
-    return onRailsOk ? WARPS.length - 1 : RAILS_FROM - 1;
+    if (!onRailsOk) return RAILS_FROM - 1;
+    // Closing on another world, ease off. A substep at top warp covers more
+    // ground than the Moon's whole sphere of influence is wide, so the craft
+    // jumps clean over the arrival it spent a transfer aiming at — the pass
+    // goes unsampled, the goal never fires, and the approach integrates badly
+    // just where it matters most.
+    for (const b of W.bodies) {
+      if (!b.soi) continue;
+      const bp = W.bodyPos(b, F.t);
+      if (Math.hypot(v.x - bp.x, v.y - bp.y) < b.soi * 3) return Math.min(WARPS.length - 1, 5);
+    }
+    return WARPS.length - 1;
   }
 
   /** Switch which vessel the player is flying/looking at — every other
       control (keys, throttle, staging, SAS) already just reads F.focus, so
       retargeting it is all that's needed to redirect control. */
   F.setFocus = function (v) {
-    if (!v || v === F.focus) return;
+    if (!v) return;
+    // remember that this was the player's own choice: cleanup() must not undo
+    // it by handing control back to a craft that still has a pod, which is the
+    // whole reason a piece of debris can be flown at all
+    pinned = v;
+    if (v === F.focus) return;
+    wreckFocus = null;
     F.focus = v;
     R.cam.zoomT = U.clamp(130 / Math.max(6, v.radius() * 2), 1.2, 9);
     F.refreshStages();
     syncSasButtons(v.sas);       // just reflect its current mode — don't reassign sasTarget
     F.setWarp(Math.min(F.warpIdx, maxWarpIdx()));
     F.syncThrottle();
+    syncControlLock();
     F.predict(true);
-    F.toast('Now flying ' + (v.mission ? v.mission.name : describe(v)));
+    F.toast(v.hasControl()
+      ? 'Now flying ' + (v.mission ? v.mission.name : describe(v))
+      : 'Following ' + describe(v) + ' — no pod aboard, so no controls');
   };
 
   /* ═══════════════════ per-frame update ═══════════════════ */
@@ -317,7 +393,14 @@
     const v = F.focus;
 
     // clamp warp if conditions changed under us
-    if (F.warpIdx > maxWarpIdx()) F.setWarp(maxWarpIdx());
+    const capIdx = maxWarpIdx();
+    if (F.warpIdx > capIdx) {
+      const was = F.warpIdx;
+      F.setWarp(capIdx);
+      if (hudActive && capIdx >= RAILS_FROM && was > capIdx) {
+        F.toast('Easing off the time warp — closing on ' + (v && v.nearBody ? v.nearBody.name : 'a world'));
+      }
+    }
     const warp = WARPS[F.warpIdx];
     const rails = F.warpIdx >= RAILS_FROM;
 
@@ -325,7 +408,10 @@
 
     const simDt = dt * warp;
     if (rails) {
-      for (const ves of F.vessels) if (!ves.dead) PH.coast(ves, simDt, F.t, 10);
+      // craft still collide with each other and with the ground while the
+      // clock is wound forward — see PH.rails for the swept tests that makes
+      // possible at these step sizes
+      PH.rails(F.vessels, simDt, F.t, 4);
       F.t += simDt;
     } else {
       let left = simDt;
@@ -343,18 +429,25 @@
     cleanup();
     checkGoals();
 
-    // let the explosion play out before the mission-failed panel covers it.
+    // Let the wreck burn on screen for the full five seconds before the panel
+    // covers it — the camera stays with the destroyed craft the whole time
+    // (see cleanup) rather than cutting away to some other mission.
     // Only actually pops the modal if we're still looking at this vessel —
-    // if the player switched away in the meantime, a toast already covered
-    // it (see cleanup()), and popping a delayed modal now would set the
-    // (global, singleton) F.over flag and block whatever *other* mission
-    // they've since switched their attention to.
+    // if the player switched away in the meantime, a toast covers it instead,
+    // since popping a delayed modal now would set the (global, singleton)
+    // F.over flag and block whatever *other* mission they've moved on to.
     if (pendingEnd) {
       pendingEnd.delay -= real;
       if (pendingEnd.delay <= 0) {
-        if (hudActive && !F.over) {
+        const holding = F.focus === pendingEnd.wreck;
+        if (hudActive && !F.over && holding) {
           F.overMission = pendingEnd.mission;
           endMission(pendingEnd.title, pendingEnd.text);
+        } else {
+          if (pendingEnd.mission) {
+            F.toast((pendingEnd.mission.name || 'A craft') + ' was lost', 'bad');
+          }
+          wreckFocus = null;          // let cleanup hand the camera to something alive
         }
         pendingEnd = null;
       }
@@ -394,24 +487,34 @@
         F.paintXfer();
       }
 
+      heatWatch(v);
+
       hudTimer -= real;
       if (hudTimer <= 0) { F.hud(); if (F.target) F.paintXfer(); hudTimer = 1 / 15; }
 
-      // planning is expensive, so only redo it when the orbit has actually
-      // changed — i.e. shortly after a burn ends
+      // A full replan is expensive, so it only runs when the orbit has really
+      // changed — shortly after a burn ends, or once a window has slipped past
+      // unused. While the burn is actually happening the panel is kept live
+      // from the Δv delivered so far instead (see trackBurn).
       if (F.target) {
-        const burning = (v && v.liveThrust > 0);
-        if (wasBurning && !burning) replanIn = 1.2;
-        wasBurning = burning;
+        trackBurn(v, simDt);
+        watchApproach();
         if (replanIn > 0) {
           replanIn -= real;
           if (replanIn <= 0) F.replan();
+        }
+        if (replanCool > 0) replanCool -= real;
+        if (!burn && replanIn <= 0 && replanCool <= 0 &&
+          F.plan && F.plan.ok && F.t - F.plan.tBurn > 45) {
+          replanCool = 6;              // real seconds — planning is not cheap
+          F.replan();
         }
       }
     }
   };
 
   function applyInput(v, real) {
+    if (!v.hasControl()) return;
     const k = F.keys;
     let steer = 0;
     if (k.a || k.arrowleft) steer += 1;
@@ -430,11 +533,16 @@
         ves.dead = true;
         S.fx.explode(ves);
         if (ves === v && !pendingEnd && hudActive) {
-          // ves is about to be spliced out and F.focus reassigned below, well
-          // before the delayed modal actually appears — carry its mission
-          // along explicitly so "Revert to Launch" reverts *this* craft, not
-          // whatever F.focus has drifted to by then
-          pendingEnd = { title: 'Mission Failed', text: 'Your craft ' + ves.crash + '.', delay: 5, mission: ves.mission };
+          // Hold the camera on the wreck for the whole five seconds instead of
+          // cutting to another craft the instant this one dies. ves is about to
+          // be spliced out of F.vessels, so wreckFocus is what keeps F.focus
+          // pointing at it — and its mission is carried along explicitly so
+          // "Revert to Launch" reverts *this* craft, whatever happens next.
+          wreckFocus = ves;
+          pendingEnd = {
+            title: 'Spacecraft Destroyed', text: 'Your craft ' + ves.crash + '.',
+            delay: 5, mission: ves.mission, wreck: ves
+          };
         } else if (ves.mission) {
           // a background/non-focus mission was lost — say so, but don't pop
           // the (flight-scene-only) mission-failed modal over whatever screen
@@ -451,12 +559,17 @@
         if (d > 60000 || junkCount > 10) F.vessels.splice(i, 1);
       }
     }
-    // if the piece we're flying lost its brain, hand over to one that has one
-    if (v && !v.hasControl()) {
+    // If the piece we're flying lost its brain, hand over to one that has one —
+    // unless the player deliberately picked this piece (that's what flying
+    // debris *is*), or we're holding on a wreck until its panel comes up.
+    if (v && !v.hasControl() && v !== pinned && v !== wreckFocus) {
       const alt = F.vessels.find(x => x !== v && x.hasControl());
-      if (alt) { F.focus = alt; F.refreshStages(); F.toast('Control handed to ' + (alt.mission ? alt.mission.name : describe(alt))); }
+      if (alt) { F.focus = alt; F.refreshStages(); syncControlLock(); F.toast('Control handed to ' + (alt.mission ? alt.mission.name : describe(alt))); }
     }
-    if (F.focus && F.vessels.indexOf(F.focus) < 0) F.focus = F.vessels[0] || null;
+    if (F.focus && F.focus !== wreckFocus && F.vessels.indexOf(F.focus) < 0) {
+      F.focus = F.vessels[0] || null;
+      syncControlLock();
+    }
   }
 
   function describe(v) {
@@ -526,7 +639,7 @@
 
   F.target = null;
   F.plan = null;
-  let replanIn = 0, wasBurning = false;
+  let replanIn = 0, wasBurning = false, replanCool = 0;
 
   /** a target is either a celestial body (from W.bodies) or a live vessel
       (picked off the map — see R.pickVessel / the vessel chip) */
@@ -543,7 +656,10 @@
   };
 
   F.setTarget = function (b) {
+    burn = null;
+    approachSet = false;
     if (!b || b === F.target) { F.target = null; F.plan = null; F.paintXfer(); return; }
+    if (!F.focus) return;                 // nothing left flying to plan a route for
     if (F.isVesselTarget(b)) {
       if (b === F.focus) { F.toast("Can't target your own craft", 'bad'); return; }
       const d = Math.hypot(b.x - F.focus.x, b.y - F.focus.y);
@@ -558,13 +674,124 @@
 
   F.replan = function () {
     if (!F.target || !F.focus || F.focus.dead) { F.plan = null; F.paintXfer(); return; }
-    // a vessel target has no closed-form orbit — hand planTransfer a fresh
+    if (arrived(F.focus)) { F.paintXfer(); return; }     // nothing left to plan
+    // a vessel target has no closed-form orbit — hand the planner a fresh
     // propagated snapshot of it each time, since it may have moved since
     // the last replan
-    const t = F.isVesselTarget(F.target) ? W.vesselTarget(F.target, F.t) : F.target;
-    F.plan = W.planTransfer(F.focus, t, F.t);
+    const tg = F.isVesselTarget(F.target) ? W.vesselTarget(F.target, F.t) : F.target;
+    // Already on our way? Then the useful answer is the nudge that fixes where
+    // we arrive, not a brand-new departure window days from now.
+    const ap = liveApproach();
+    if (ap && ap.inSoi && !F.focus.landed) {
+      const c = W.planCorrection(F.focus, tg, F.t);
+      if (c) { F.plan = c; F.paintXfer(); return; }
+    }
+    F.plan = W.planTransfer(F.focus, tg, F.t);
     F.paintXfer();
   };
+
+  /**
+   * The target wrapped so W.predict can measure how close the path we are
+   * *actually* on comes to it. That's the number that tells a player whether
+   * the burn worked, live, instead of only after the next full replan.
+   */
+  function watchOf() {
+    const tg = F.target;
+    if (!tg) return null;
+    if (!F.isVesselTarget(tg)) {
+      return { posAt: tt => W.bodyPos(tg, tt), radius: tg.radius, soi: tg.soi || tg.radius * 2.5 };
+    }
+    // a craft has no closed-form orbit, so reuse the propagated track the
+    // current plan already built for it rather than integrating another one
+    const wrap = (F.plan && F.plan.ok && F.plan.target && F.plan.target.isVessel) ? F.plan.target : null;
+    if (!wrap || !wrap.track) return null;
+    return { posAt: tt => wrap.track.at(tt), radius: Math.max(8, tg.radius()), soi: wrap.soi || 5000 };
+  }
+
+  /** have we actually got where we were going? */
+  function arrived(v) {
+    const tg = F.target;
+    if (!tg || !v) return false;
+    if (F.isVesselTarget(tg)) return Math.hypot(tg.x - v.x, tg.y - v.y) < 3000;
+    return W.soiBody(v.x, v.y, F.t) === tg;
+  }
+
+  /** closest approach along the currently predicted path, or null if we're
+      not pointed anywhere near the target yet */
+  function liveApproach() {
+    const pr = F.path, w = watchOf();
+    if (!pr || !pr.closest || !w || !isFinite(pr.closest.d)) return null;
+    const soi = w.soi || w.radius * 3;
+    if (pr.closest.d > soi * 3) return null;
+    return {
+      d: pr.closest.d, soi,
+      alt: pr.closest.d - w.radius,
+      eta: pr.closest.t - F.t,
+      inSoi: pr.closest.d < soi
+    };
+  }
+
+  /**
+   * Watch the plotted burn as it actually happens: count the Δv delivered so
+   * the panel can show what is *left* rather than the figure it started with,
+   * and say plainly when it's done. A burn that overshoots or undershoots is
+   * picked up by the replan that follows it.
+   */
+  function trackBurn(v, simDt) {
+    const p = F.plan;
+    const burning = !!(v && !v.dead && (v.liveThrust || 0) > 0);
+    if (p && p.ok) {
+      const lead = burnLead();
+      if (!p._opened && F.t >= p.tBurn - lead) {
+        p._opened = true;
+        // a correction is "open" the moment it's planned; only the once-per-
+        // transfer departure window is worth interrupting the player for
+        if (!burning && !p.correction && hudActive) {
+          F.toast('Burn window open — point prograde and throttle up');
+        }
+      }
+      // anything lit within half a minute of the window counts as *this* burn
+      if (burning && F.t >= p.tBurn - lead - 30) {
+        if (!burn) burn = { need: p.dv, done: 0, announced: false };
+        burn.done += (v.liveThrust / Math.max(1, v.mass)) * simDt;
+        if (!burn.announced && burn.done >= burn.need) {
+          burn.announced = true;
+          if (hudActive) F.toast('Burn complete — cut the throttle (X)', 'gold');
+          if (S.audio) S.audio.blip(720, 0.16, 'sine', 0.1);
+        }
+      }
+    }
+    if (wasBurning && !burning) { replanIn = 1.2; burn = null; }
+    wasBurning = burning;
+  }
+
+  /** the moment the path we're on genuinely reaches the target, say so */
+  function watchApproach() {
+    const ap = liveApproach();
+    if (ap && ap.inSoi && !approachSet) {
+      approachSet = true;
+      if (hudActive) {
+        F.toast('Approach set — ' + F.targetName(F.target) + ' in ' + U.time(Math.max(0, ap.eta)), 'gold');
+        if (S.audio) S.audio.blip(880, 0.2, 'sine', 0.12);
+      }
+    } else if (!ap || ap.d > ap.soi * 1.2) {
+      approachSet = false;
+    }
+  }
+
+  /**
+   * How early to light the engine. The planner works in instantaneous kicks,
+   * but a real burn takes time — start it on the node and half of it lands
+   * late, which is exactly the sort of thing that leaves a beginner wondering
+   * why a "correct" burn missed. Splitting the burn either side of the node
+   * puts its centre of effort where the plan assumed it.
+   */
+  function burnLead() {
+    const p = F.plan;
+    if (!p || !p.ok || !F.focus) return 0;
+    const s = burnSeconds(F.focus, p.dv);
+    return s ? Math.min(s / 2, p.travel * 0.25) : 0;
+  }
 
   /** seconds of burn needed at full throttle to deliver the planned Δv */
   function burnSeconds(v, dv) {
@@ -590,36 +817,112 @@
     document.getElementById('xTitle').textContent = 'TRANSFER → ' + F.targetName(F.target).toUpperCase();
 
     const body = document.getElementById('xBody');
+    const pro = document.getElementById('xPro');
     const p = F.plan;
-    if (!p || !p.ok) {
-      body.innerHTML = '<div class="why">' + ((p && p.reason) || 'No route found.') + '</div>';
+    const v = F.focus;
+
+    // got there: stop offering routes to somewhere we already are, and say
+    // what to do next instead
+    if (v && arrived(v)) {
+      body.innerHTML = '<div class="go ok">Arrived at ' + F.targetName(F.target) + '</div>' +
+        '<div class="note">' + (F.isVesselTarget(F.target)
+          ? 'Close the last of the gap on <b>retrograde</b> to match speed.'
+          : 'Burn <b>retrograde</b> at the low point to circularise, or keep burning to land.') +
+        '</div>';
+      if (pro) pro.classList.add('hidden');
       return;
     }
-    const left = p.tBurn - F.t;
-    const row = (k, v2) => '<div class="r"><span>' + k + '</span><b>' + v2 + '</b></div>';
-    const secs = burnSeconds(F.focus, p.dv);
-    const impact = p.intercept && p.periapsis <= 0;
-    let h = row('Burn in', left > 0 ? U.time(left) : 'now')
-      + row('Δv needed', U.speed(p.dv))
-      + (secs != null ? row('Burn for', secs.toFixed(1) + ' s') : '')
-      + row('Travel time', U.time(p.travel))
-      + row(p.intercept ? 'Arrival alt' : 'Miss by',
-        impact ? 'impact' : U.dist(Math.max(0, p.periapsis)));
-    if (left > 0) {
-      h += '<div class="go">Point <b>Prograde</b>, wait for zero</div>';
-    } else if (left > -Math.max(20, (secs || 20) * 1.5)) {
-      h += '<div class="go hot">BURN NOW: prograde</div>';
-    } else {
-      h += '<div class="go">Window passed. Recalculate</div>';
+
+    if (!p || !p.ok) {
+      body.innerHTML = '<div class="why">' + ((p && p.reason) || 'No route found.') + '</div>';
+      if (pro) pro.classList.add('hidden');
+      return;
     }
-    if (!p.intercept) {
-      h += '<div class="note">This path misses ' + F.targetName(F.target) +
-        '. Burn anyway, then recalculate for a correction.</div>';
-    } else if (impact) {
-      h += '<div class="note">You will arrive on a collision course. Burn ' +
-        'retrograde on the way in to slow down and land.</div>';
+
+    const row = (k, val, cls) => '<div class="r' + (cls ? ' ' + cls : '') +
+      '"><span>' + k + '</span><b>' + val + '</b></div>';
+    // count down to lighting the engine, not to the node itself
+    const left = p.tBurn - burnLead() - F.t;
+    const ap = liveApproach();
+    // once the engine is lit, the panel counts down what is still to be burned
+    // rather than repeating the figure the burn started at
+    const dvLeft = burn ? Math.max(0, burn.need - burn.done) : p.dv;
+    const secs = v ? burnSeconds(v, dvLeft) : null;
+    const name = F.targetName(F.target);
+
+    // is the correction the planner found actually worth burning?
+    const worthIt = p.correction &&
+      Math.abs(p.nowPeriapsis - p.wantAlt) > Math.max(15000, Math.abs(p.wantAlt) * 0.5) &&
+      p.dv >= 0.5;
+    const aim = p.retro ? 'Retrograde' : 'Prograde';
+
+    let h = '';
+    if (burn) {
+      const done = U.clamp(burn.done / Math.max(1e-6, burn.need), 0, 1);
+      h += row('Δv still to burn', U.speed(dvLeft), 'live')
+        + (secs != null ? row('Hold for', secs.toFixed(1) + ' s') : '')
+        + '<div class="bBar"><div class="bFill" style="width:' + (done * 100).toFixed(1) + '%"></div></div>';
+    } else if (p.correction) {
+      if (worthIt) {
+        h += row('Correction', U.speed(p.dv) + ' ' + aim.toLowerCase())
+          + (secs != null ? row('Burn for', secs.toFixed(1) + ' s') : '')
+          + row('Would arrive at', p.periapsis <= 0 ? 'impact' : U.dist(Math.max(0, p.periapsis)));
+      }
+    } else {
+      h += row('Burn in', left > 0 ? U.time(left) : 'now')
+        + row('Δv needed', U.speed(p.dv))
+        + (secs != null ? row('Burn for', secs.toFixed(1) + ' s') : '');
+    }
+    if (ap) {
+      h += row('Closest pass', ap.alt <= 0 ? 'impact' : U.dist(ap.alt), 'live')
+        + row('Arrives in', U.time(Math.max(0, ap.eta)), 'live');
+    } else {
+      h += row('Travel time', U.time(p.travel))
+        + row(p.intercept ? 'Arrival alt' : 'Miss by',
+          p.periapsis <= 0 ? 'impact' : U.dist(Math.max(0, p.periapsis)));
+    }
+
+    if (burn) {
+      h += '<div class="go hot">BURNING — hold ' + aim.toLowerCase() + ' until Δv hits zero</div>';
+    } else if (p.correction) {
+      h += worthIt
+        ? '<div class="go hot">TRIM NOW — point <b>' + aim + '</b> and tap the throttle</div>'
+        : '<div class="go ok">On course for ' + name + '</div>';
+    } else if (ap && ap.inSoi) {
+      h += '<div class="go ok">On course for ' + name + '</div>';
+    } else if (left > 6) {
+      h += '<div class="go">Point <b>Prograde</b>, then throttle up at zero</div>';
+    } else if (left > -Math.max(20, (secs || 20) * 1.5)) {
+      h += '<div class="go hot">BURN NOW — prograde, full throttle</div>';
+    } else {
+      h += '<div class="go">Window passed — replanning…</div>';
+    }
+
+    // there is no point counting down to a burn the craft cannot afford
+    const have = v ? v.stageDv() : 0;
+    if (!burn && have > 0 && have < p.dv * 0.97) {
+      h += '<div class="note warn">Only ' + U.speed(have) + ' left in this stage, and the burn needs ' +
+        U.speed(p.dv) + '. Stage first, or expect to come up short.</div>';
+    }
+
+    if (ap && ap.inSoi && !worthIt) {
+      h += '<div class="note">' + (F.isVesselTarget(F.target)
+        ? 'Coast in, then burn retrograde as you close, to match speed.'
+        : 'Coast in, then burn <b>retrograde</b> at the closest point to drop into orbit around ' +
+        name + '. Land from there.') + '</div>';
+    } else if (!p.intercept && !p.correction) {
+      h += '<div class="note">The best pass found still misses ' + name +
+        '. Burn it anyway — the plan refines itself once you are on your way.</div>';
     }
     body.innerHTML = h;
+
+    // the "point me the right way" button follows whichever way the burn needs
+    if (pro) {
+      const want = p.retro ? 'retro' : 'pro';
+      pro.textContent = p.retro ? '🧭 Point retrograde' : '🧭 Point prograde';
+      pro.dataset.sas = want;
+      pro.classList.toggle('hidden', !v || !v.hasControl() || v.sas === want);
+    }
   };
 
   /* ═══════════════════ prediction ═══════════════════ */
@@ -630,7 +933,7 @@
     const soi = W.soiBody(v.x, v.y, F.t);
     F.el = W.elements(soi, v.x, v.y, v.vx, v.vy, F.t);
     if (v.landed) { F.path = null; return; }
-    F.path = W.predict(v.x, v.y, v.vx, v.vy, F.t, { maxSteps: 2000 });
+    F.path = W.predict(v.x, v.y, v.vx, v.vy, F.t, { maxSteps: 2000, watch: watchOf() });
   };
 
   /** lighter-weight, throttled path prediction for every other vessel in the
@@ -726,11 +1029,36 @@
     set('hDv', U.speed(v.stageDv()));
     set('hSoi', (W.soiBody(v.x, v.y, F.t)).name + (v.landed ? ' · landed' : ''));
 
+    // friction heating, as a share of what the most stressed part can take —
+    // only worth screen space once there's actually something to watch
+    const heatRow = document.getElementById('heatRow');
+    const hf = v.heatFrac || 0;
+    if (heatRow) {
+      heatRow.classList.toggle('hidden', hf < 0.05);
+      heatRow.classList.toggle('hot', hf > 0.6);
+    }
+    set('hHeat', Math.round(hf * 100) + '%');
+
     paintFuel(v);
 
     F.syncThrottle();
+    syncControlLock();
     updateStageHighlight();
   };
+
+  /** shout before a re-entry cooks the craft, not after */
+  function heatWatch(v) {
+    if (!v || v.dead) return;
+    const f = v.heatFrac || 0;
+    const lvl = f > 0.8 ? 2 : f > 0.45 ? 1 : 0;
+    const was = v._heatWarn || 0;
+    if (lvl > was) {
+      v._heatWarn = lvl;
+      F.toast(lvl === 2
+        ? 'Heat critical — parts are burning away!'
+        : 'Friction heating — the hull is glowing. Slow down, or get a shield in front', 'bad');
+    } else if (!lvl && was) v._heatWarn = 0;
+  }
 
   F.syncThrottle = function () {
     const v = F.focus;
@@ -744,6 +1072,7 @@
     F.setSas('off');
     F.setWarp(0);
     F.syncThrottle();
+    syncControlLock();
   };
 
   /* ═══════════════════ stage list ═══════════════════ */
@@ -805,6 +1134,9 @@
     // silently blocks input/staging on every craft from here on.
     F.over = null;
     F.overMission = null;
+    // the camera was parked on the wreck for the panel — release it, and
+    // cleanup() will hand it to whatever is still flying
+    wreckFocus = null;
     const ov = document.getElementById('endOverlay');
     if (ov) ov.classList.add('hidden');
   }
@@ -860,6 +1192,10 @@
     pendingEnd = null;
     echoVessels = [];
     inAtmo = null;
+    wreckFocus = null;
+    pinned = null;
+    burn = null;
+    approachSet = false;
     // a resumed vessel may already be well past first-space; setting this
     // conservatively true just means a landed craft can unlock "home" again
     // (harmless — unlock() is idempotent) instead of silently never being able to
@@ -873,6 +1209,7 @@
     }
 
     F.refreshStages();
+    syncControlLock();
     F.predict(true);
     if (dropped) F.toast(dropped + ' craft could not be restored (parts changed).', 'bad');
     F.toast('Welcome back — resumed ' + F.vessels.filter(v => v.mission).length + ' mission(s).');

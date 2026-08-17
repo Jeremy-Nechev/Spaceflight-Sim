@@ -665,7 +665,35 @@
       p.def.draw(ctx, p, p.def);
       ctx.restore();
     }
+    if (v.heatGlow > 0.08) drawPlasma(ctx, v, t, zoom);
   };
+
+  /** shock-heated air piling up on the windward face during a hot re-entry */
+  function drawPlasma(ctx, v, t, zoom) {
+    const R0 = v.radius();
+    if (R0 * zoom < 1.6) return;
+    const k = U.clamp(v.heatGlow / 0.6, 0, 1);
+    const sp = Math.hypot(v.vx, v.vy) || 1;
+    const ux = v.vx / sp, uy = v.vy / sp;         // the air arrives from here
+    const cx = v.x - cam.x + ux * R0 * 0.7;
+    const cy = v.y - cam.y + uy * R0 * 0.7;
+    const rr = R0 * (0.6 + 0.5 * k) * (0.94 + 0.06 * Math.sin(t * 29));
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rr);
+    g.addColorStop(0, 'rgba(255,248,232,' + (0.45 * k).toFixed(3) + ')');
+    g.addColorStop(0.34, 'rgba(255,168,78,' + (0.36 * k).toFixed(3) + ')');
+    g.addColorStop(1, 'rgba(255,86,28,0)');
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.translate(cx, cy);
+    // squashed along the flow and spread across it, the way a bow shock sits
+    ctx.rotate(Math.atan2(uy, ux));
+    ctx.scale(0.7, 1.3);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(0, 0, rr, 0, U.TAU);
+    ctx.fill();
+    ctx.restore();
+  }
 
   function drawFlame(ctx, v, p, t, zoom) {
     const w = p.def.w, thr = p.throttle;
@@ -790,6 +818,33 @@
         // spread the puffs apart before friction settles them
         drag: U.lerp(0.85, 0.5, ground), grav: 0,
         gdrag: U.lerp(0.94, 0.985, ground), bounce: 0
+      });
+    }
+  };
+
+  /**
+   * The burning trail a craft drags behind it while friction heating is
+   * cooking the hull. `k` is 0..1 hot; physics.js drives it every step.
+   */
+  FX.reentry = function (v, k, dt) {
+    const want = dt * 46 * k;
+    let n = Math.floor(want);
+    if (Math.random() < want - n) n++;
+    if (!n) return;
+    const sp = Math.hypot(v.vx, v.vy) || 1;
+    const ux = v.vx / sp, uy = v.vy / sp;
+    const R0 = v.radius();
+    for (let i = 0; i < n; i++) {
+      const j = (Math.random() - 0.5) * R0 * 1.3;
+      const back = 30 + Math.random() * 90;
+      push({
+        x: v.x + ux * R0 * 0.35 - uy * j,
+        y: v.y + uy * R0 * 0.35 + ux * j,
+        vx: v.vx * 0.6 - ux * back, vy: v.vy * 0.6 - uy * back,
+        life: 0, max: 0.45 + Math.random() * 1.1,
+        r0: R0 * 0.14, r1: R0 * (0.5 + Math.random() * 0.9),
+        col: Math.random() < 0.55 ? [255, 214, 138] : [255, 138, 58],
+        a0: 0.55 * k, drag: 1.1, grav: 0, gdrag: 0.9, bounce: 0
       });
     }
   };

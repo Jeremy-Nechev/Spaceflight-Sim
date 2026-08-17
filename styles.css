@@ -15,6 +15,9 @@
   --bad:#ff5a5a;
   --font:'Segoe UI',Roboto,-apple-system,'Helvetica Neue',Arial,sans-serif;
   --mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
+  /* height of the active-missions widget, measured by main.js — everything
+     that shares the bottom of the screen keeps clear of it */
+  --missionH:0px;
 }
 
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -54,6 +57,10 @@ button:disabled{opacity:.4;cursor:default}
   background:var(--panel);border:1px solid var(--edge);border-radius:16px;
   padding:26px 30px;max-width:560px;width:100%;
   box-shadow:0 24px 70px rgba(0,0,0,.65), inset 0 1px 0 rgba(255,255,255,.06);
+  /* auto margins rather than align-items alone: a card taller than the screen
+     then scrolls from the top instead of centring itself half off the edge,
+     and it respects the space reserved for the active-missions widget */
+  margin:auto;
 }
 .menuCard.narrow{max-width:440px}
 .menuCard h1{
@@ -222,6 +229,8 @@ button:disabled{opacity:.4;cursor:default}
 .hudRow b{font-family:var(--mono);font-weight:500;font-size:12.5px}
 .hudRow.soi{margin-top:5px;padding-top:6px;border-top:1px solid var(--edge)}
 .hudRow.soi b{color:var(--accent)}
+.hudRow.heat b{color:var(--accent2)}
+.hudRow.heat.hot b{color:var(--bad);animation:pulse 1s ease-in-out infinite}
 
 #fuelBox{
   padding:8px 12px;
@@ -272,9 +281,17 @@ button:disabled{opacity:.4;cursor:default}
 #xBody .go.hot{background:rgba(90,220,130,.22);border-color:rgba(120,240,170,.7);color:#c9ffe0;
   animation:pulse 1s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.55}}
+#xBody .go.ok{background:rgba(90,220,130,.18);border-color:rgba(120,240,170,.6);color:#c9ffe0;animation:none}
+#xBody .r.live b{color:var(--accent2)}
 #xBody .why{font-size:11px;color:var(--accent2);line-height:1.4}
 #xBody .note{font-size:10.5px;color:var(--dim);margin-top:6px;line-height:1.35}
-#xRecalc{width:100%;margin-top:8px;font-size:11px;padding:5px}
+#xBody .note.warn{color:var(--accent2)}
+/* how much of the planned burn has actually been delivered */
+#xBody .bBar{height:6px;border-radius:4px;margin:5px 0 2px;overflow:hidden;
+  background:rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.1)}
+#xBody .bFill{height:100%;background:linear-gradient(90deg,#ff8a2b,#ffd06b);transition:width .15s}
+.xBtns{display:flex;gap:5px;margin-top:8px}
+.xBtns button{flex:1;font-size:11px;padding:5px}
 #mapTip{
   position:absolute;left:50%;transform:translateX(-50%);bottom:22px;
   background:rgba(10,16,28,.85);border:1px solid var(--edge);border-radius:16px;
@@ -322,9 +339,20 @@ button:disabled{opacity:.4;cursor:default}
 }
 #btnStage:hover{background:linear-gradient(180deg,#f5794f,#c94429)}
 
+/* flying a piece of debris: nothing aboard to steer with, so the controls are
+   visibly dead rather than quietly doing nothing */
+#controls.locked>*,#sasWrap.locked>*{opacity:.3;pointer-events:none;filter:grayscale(.7)}
+#noCtrl{
+  position:absolute;left:50%;bottom:184px;transform:translateX(-50%);z-index:12;
+  background:rgba(10,16,28,.88);border:1px solid rgba(255,180,90,.5);border-radius:16px;
+  padding:6px 16px;font-size:11.5px;color:#ffd9a8;pointer-events:none;white-space:nowrap;
+}
+
+/* above the overlays (z 60): an overlay's backdrop-filter blurs whatever sits
+   behind it, which used to smear the "too many missions" notice on the menu */
 #toast{
-  position:absolute;left:50%;top:96px;transform:translateX(-50%);display:flex;flex-direction:column;
-  gap:6px;align-items:center;pointer-events:none;
+  position:fixed;left:50%;top:96px;transform:translateX(-50%);display:flex;flex-direction:column;
+  gap:6px;align-items:center;pointer-events:none;z-index:95;
 }
 .toastMsg{
   background:rgba(12,20,34,.94);border:1px solid var(--edge-hot);border-radius:22px;
@@ -347,7 +375,7 @@ button:disabled{opacity:.4;cursor:default}
 /* ───────────── mission bar (VAB / menu) ───────────── */
 #missionBar{
   position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:61;
-  width:min(420px,92vw);max-height:40vh;overflow-y:auto;
+  width:min(420px,92vw);max-height:32vh;overflow-y:auto;
   background:var(--panel);border:1px solid var(--edge-hot);border-radius:12px;
   padding:10px 12px;box-shadow:0 10px 30px rgba(0,0,0,.5);
 }
@@ -361,6 +389,24 @@ button:disabled{opacity:.4;cursor:default}
 .missionRow .mName{flex:0 0 auto;font-weight:600;color:#fff;font-size:12.5px}
 .missionRow .mStat{flex:1;color:var(--dim);font-size:11px}
 .missionRow button{padding:4px 10px;font-size:11px}
+.missionRow .mRec{background:rgba(255,255,255,.05)}
+.missionRow .mRec.armed{border-color:var(--bad);color:#ffbaba;background:rgba(150,40,40,.35)}
+
+/* keep the widget from landing on top of anything else that lives at the
+   bottom of the screen — the menu card, the hangar panels, the build hint */
+body.hasMissions .overlay{padding-bottom:calc(var(--missionH) + 24px)}
+/* the card is centred in the *padded* box, so capping it to what's left above
+   the widget is what actually keeps the two apart — a taller card scrolls
+   inside itself instead of sliding down behind the widget */
+body.hasMissions .menuCard{max-height:calc(100vh - var(--missionH) - 44px);overflow-y:auto}
+body.hasMissions .panel{top:calc(50% - var(--missionH) / 2)}
+body.hasMissions #buildHint{bottom:calc(var(--missionH) + 26px)}
+/* the widget is centred, so on a wide screen it clears the side panels by
+   itself — only squeeze them when the screen is too narrow for that */
+@media (max-width:1000px){
+  body.hasMissions #stageEdit{bottom:calc(var(--missionH) + 20px)}
+  body.hasMissions #palette{bottom:calc(var(--missionH) + 8px)}
+}
 
 /* ───────────── vessel chip (map view) ───────────── */
 #vesselChip{
@@ -390,4 +436,6 @@ button:disabled{opacity:.4;cursor:default}
   .bar .barTitle{display:none}
   .rotBtn{width:52px;height:52px}
   .rotLabel{display:none}
+  #noCtrl{bottom:176px;font-size:10px;white-space:normal;max-width:82vw;text-align:center}
+  #missionBar{width:min(420px,calc(100vw - 24px))}
 }

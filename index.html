@@ -82,6 +82,14 @@
       <li><b>Circularize.</b> Right as you crest Apoapsis, throttle up again with the autopilot on Prograde. This raises your <b>Periapsis</b> — the low point of the orbit. Keep burning until Periapsis also reads above 60 km.</li>
       <li><b>Cut the engine.</b> With both Apoapsis and Periapsis above 60 km, you're in a stable orbit that won't decay — no more fuel needed. ★ "Orbit the Earth" unlocks the moment you get there.</li>
     </ol>
+    <h2>Coming back down</h2>
+    <p class="tag" style="margin:-6px 0 12px">Air that thick, hit that fast, gets hot. The <b>Hull heat</b> readout
+      appears on the HUD once friction starts to bite — at 100% parts begin burning away, engines and fins first.</p>
+    <div class="keyGrid">
+      <b>Come in shallow</b><span>Drop Periapsis to around 10–30 km, not into the ground. A steep dive is what cooks a craft</span>
+      <b>Blunt end first</b><span>Autopilot on <b>Retrograde</b> puts your heaviest, toughest end into the airflow</span>
+      <b>Heat Shield</b><span>An ablative dish under the stack takes the heat instead of everything behind it — worth its weight coming home from the Moon</span>
+    </div>
     <button id="orbitGuideClose" class="primary big">Got it</button>
   </div>
 </div>
@@ -151,6 +159,7 @@
     <div class="hudRow"><span>Periapsis</span><b id="hPe">N/A</b></div>
     <div class="hudRow"><span>TWR</span><b id="hTwr">0.00</b></div>
     <div class="hudRow"><span>Δv left</span><b id="hDv">0 m/s</b></div>
+    <div class="hudRow heat hidden" id="heatRow" title="How hot friction has made the most exposed part, as a share of what it can take"><span>Hull heat</span><b id="hHeat">0%</b></div>
     <div class="hudRow soi"><span>Sphere</span><b id="hSoi">Earth</b></div>
   </div>
 
@@ -165,7 +174,10 @@
   <div id="xferPanel" class="hidden">
     <div class="xHead"><span id="xTitle">TRANSFER</span><button id="xClose" title="Clear target">✕</button></div>
     <div id="xBody"></div>
-    <button id="xRecalc">Recalculate</button>
+    <div class="xBtns">
+      <button id="xPro" class="hidden">🧭 Point prograde</button>
+      <button id="xRecalc">Recalculate</button>
+    </div>
   </div>
   <div id="mapTip" class="hidden">Click a world to plan a transfer to it</div>
 
@@ -203,6 +215,8 @@
 
   <div id="vesselChip" class="hidden"></div>
 
+  <div id="noCtrl" class="hidden">Debris — no command pod aboard, so there is nothing to steer with</div>
+
   <div id="endOverlay" class="overlay hidden">
     <div class="menuCard narrow">
       <h2 id="endTitle">Mission Over</h2>
@@ -210,6 +224,7 @@
       <div class="menuBtns">
         <button id="endRevert" class="primary big">⟲ Revert to Launch</button>
         <button id="endBuild" class="big">🛠 Back to Hangar</button>
+        <button id="endMenu" class="big">☰ Main Menu</button>
       </div>
     </div>
   </div>
