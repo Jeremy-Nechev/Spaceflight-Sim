@@ -608,6 +608,21 @@
     F.path = W.predict(v.x, v.y, v.vx, v.vy, F.t, { maxSteps: 2000 });
   };
 
+  /** lighter-weight, throttled path prediction for other in-flight missions
+      (not whatever's currently focused) — keeps a .path on each vessel so a
+      rendezvous target's trajectory is ready to draw without the cost of
+      running the full prediction on every craft, every frame */
+  let otherPredTimer = 0;
+  F.predictOthers = function (real) {
+    otherPredTimer -= real;
+    if (otherPredTimer > 0) return;
+    otherPredTimer = 0.5;
+    for (const ves of F.vessels) {
+      if (ves === F.focus || ves.dead || !ves.mission) continue;
+      ves.path = ves.landed ? null : W.predict(ves.x, ves.y, ves.vx, ves.vy, F.t, { maxSteps: 500 });
+    }
+  };
+
   /* ═══════════════════ HUD ═══════════════════ */
 
   const set = (id, txt) => {
