@@ -555,7 +555,7 @@
     if (tip) tip.classList.toggle('hidden', !S.render.cam.map || !!F.target);
     if (!F.target) { panel.classList.add('hidden'); return; }
     panel.classList.remove('hidden');
-    document.getElementById('xTitle').textContent = 'TRANSFER → ' + F.target.name.toUpperCase();
+    document.getElementById('xTitle').textContent = 'TRANSFER → ' + F.targetName(F.target).toUpperCase();
 
     const body = document.getElementById('xBody');
     const p = F.plan;
@@ -581,7 +581,7 @@
       h += '<div class="go">Window passed. Recalculate</div>';
     }
     if (!p.intercept) {
-      h += '<div class="note">This path misses ' + F.target.name +
+      h += '<div class="note">This path misses ' + F.targetName(F.target) +
         '. Burn anyway, then recalculate for a correction.</div>';
     } else if (impact) {
       h += '<div class="note">You will arrive on a collision course. Burn ' +
