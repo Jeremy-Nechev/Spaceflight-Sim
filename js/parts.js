@@ -286,10 +286,15 @@
 
   function drawChute(ctx, st, d) {
     const w = d.w, h = d.h;
-    ctx.fillStyle = cyl(ctx, w, METAL_L, METAL_M, METAL_D);
-    U.roundRect(ctx, -w / 2, -h / 2, w, h, w * 0.18); ctx.fill(); ink(ctx, w);
+    // the pack itself is a squat can, a touch narrower than the stack it sits
+    // on, with a mounting collar underneath rather than a full-width block
+    const pw = w * 0.82;
+    ctx.fillStyle = cyl(ctx, pw, METAL_L, METAL_M, METAL_D);
+    U.roundRect(ctx, -pw / 2, -h / 2 + h * 0.12, pw, h * 0.88, pw * 0.22); ctx.fill(); ink(ctx, pw);
+    ctx.fillStyle = 'rgba(70,78,90,.95)';
+    ctx.fillRect(-w / 2, -h / 2, w, h * 0.16);
     ctx.fillStyle = ACCENT;
-    ctx.fillRect(-w / 2, h / 2 - h * 0.2, w, h * 0.16);
+    ctx.fillRect(-pw / 2, h / 2 - h * 0.24, pw, h * 0.16);
     if (st && st.chute > 0.001) {
       const t = st.chute;                       // 0..1 inflation
       const cw = d.chute.width * (0.25 + 0.75 * t);
@@ -552,12 +557,12 @@
   add({ id: 'fin_s', name: 'Fin', cat: 'Aero', type: 'fin', w: 1.5, h: 2.0, mass: 50, radial: true, cd: 2.1, draw: drawFin, desc: 'Keeps the nose pointing forward in air.' });
   add({ id: 'fin_l', name: 'Big Fin', cat: 'Aero', type: 'fin', w: 2.5, h: 3.0, mass: 140, radial: true, cd: 2.3, draw: drawFin, desc: 'Twice the bite. Heavy.' });
   add({
-    id: 'chute', name: 'Parachute', cat: 'Aero', type: 'chute', w: 1, h: 1, mass: 85, cd: 0.9,
+    id: 'chute', name: 'Parachute', cat: 'Aero', type: 'chute', w: 1, h: 0.75, mass: 85, cd: 0.9,
     chute: { area: 240, cd: 1.3, width: 9, riser: 5.5 },
     desc: 'Brings a light capsule down at about 9 m/s.', draw: drawChute
   });
   add({
-    id: 'chute_l', name: 'Big Chute', cat: 'Aero', type: 'chute', w: 2, h: 1.2, mass: 210, cd: 0.9,
+    id: 'chute_l', name: 'Big Chute', cat: 'Aero', type: 'chute', w: 2, h: 1.0, mass: 210, cd: 0.9,
     chute: { area: 700, cd: 1.3, width: 17, riser: 9 },
     desc: 'For heavy capsules coming home hot.', draw: drawChute
   });

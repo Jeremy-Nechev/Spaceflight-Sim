@@ -90,7 +90,7 @@
         uid: p.uid, id: p.id, x: p.lx, y: p.ly, flip: p.flip,
         fuel: p.fuel, active: p.active, fired: p.fired,
         chute: p.chute, chuteOut: p.chuteOut, deployed: p.deployed,
-        temp: p.temp
+        temp: p.temp, cut: p.cut
       })),
       stages: v.stages.map(g => g.slice()),
       stageIdx: v.stageIdx,
@@ -107,7 +107,7 @@
       if (!p) continue;                 // unknown/removed part id — skip, same as fromBlueprint
       p.fuel = s.fuel; p.active = !!s.active; p.fired = !!s.fired;
       p.chute = s.chute || 0; p.chuteOut = !!s.chuteOut; p.deployed = !!s.deployed;
-      p.temp = s.temp || 0;
+      p.temp = s.temp || 0; p.cut = !!s.cut;
       parts.push(p);
       V.seedUid(p.uid);
     }
@@ -200,7 +200,7 @@
       } else if (t === 'sep') {
         p.fired = true; sep = true;
       } else if (t === 'chute') {
-        p.chuteOut = true;
+        if (!p.cut) p.chuteOut = true;      // a canopy cut loose stays gone
       }
     }
     this._dirty = true;

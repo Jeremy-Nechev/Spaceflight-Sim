@@ -215,7 +215,8 @@
     Fx += _g.x * m; Fy += _g.y * m;
 
     /* ── where are we ── */
-    const near = nearestBody(v.x, v.y, t);
+    const near = nearestBody(v.x, v.y, t);      // whose ground we could hit
+    const ref = W.soiBody(v.x, v.y, t);         // whose gravity we are orbiting
     const gi = W.groundInfo(near, v.x, v.y, t);      // used by the ground-contact
     // section below too — nothing moves between here and there, so one query does
     const altASL = W.altitudeASL(W.earth, v.x, v.y, t);
@@ -234,8 +235,20 @@
         wantRate = v.steer * MAX_RATE;
       } else {
         let target = v.sasTarget;
-        if (v.sas === 'pro' && speed > 0.5) target = Math.atan2(-v.vx, v.vy);
-        else if (v.sas === 'retro' && speed > 0.5) target = Math.atan2(v.vx, -v.vy);
+        // Prograde/retrograde have to be measured against the world you are
+        // actually orbiting, not against the origin. Near Earth the two agree
+        // (Earth doesn't move), but the Moon travels at ~470 m/s, so out there
+        // the absolute velocity points somewhere quite different from the
+        // direction of travel — which is why the nose used to settle well off
+        // prograde once you left Earth's neighbourhood. The frame is the
+        // *sphere of influence*, not the nearest surface: those two disagree
+        // across a wide band around the Moon, and it is the dominant gravity
+        // that decides which way an orbit is actually going.
+        const bv = W.bodyVel(ref, t);
+        const rvx = v.vx - bv.x, rvy = v.vy - bv.y;
+        const rSpeed = Math.hypot(rvx, rvy);
+        if (v.sas === 'pro' && rSpeed > 0.5) target = Math.atan2(-rvx, rvy);
+        else if (v.sas === 'retro' && rSpeed > 0.5) target = Math.atan2(rvx, -rvy);
         else if (v.sas === 'up') {
           // nose along the outward radial: rot(a)·(0,1) = r̂  ⇒  a = atan2(−r̂x, r̂y)
           const bp = W.bodyPos(near, t);
@@ -382,6 +395,7 @@
       v.omega *= 0.75;
     }
     v.nearBody = near;
+    v.refBody = ref;
     v.altASL = altASL;
     v.atmoF = atmoF;
 
@@ -658,6 +672,7 @@
     v.angle = U.wrap(v.angle + v.omega * dt);
     v.updateMass();
     v.nearBody = nearestBody(v.x, v.y, t);
+    v.refBody = W.soiBody(v.x, v.y, t);
     v.altASL = W.altitudeASL(W.earth, v.x, v.y, t);
     v.atmoF = 0;
     v.liveThrust = 0;

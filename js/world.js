@@ -606,8 +606,10 @@
         const tB = centreT + tSpread * (nT_ === 1 ? 0 : (i / (nT_ - 1) - 0.5) * 2);
         if (tB < t) continue;
         const st = propagate(v.x, v.y, v.vx, v.vy, t, tB - t);
-        const sp = Math.hypot(st.vx, st.vy) || 1;
-        const ux = st.vx / sp, uy = st.vy / sp;
+        // prograde in the parent's frame, matching the autopilot
+        const pv = W.bodyVel(parent, st.t);
+        const sp = Math.hypot(st.vx - pv.x, st.vy - pv.y) || 1;
+        const ux = (st.vx - pv.x) / sp, uy = (st.vy - pv.y) / sp;
         for (let k = 0; k < nD; k++) {
           const dv = dvCentre + dvSpread * (nD === 1 ? 0 : (k / (nD - 1) - 0.5) * 2);
           if (dv <= 0) continue;
@@ -668,9 +670,10 @@
    *
    * Returns a plan in the same shape as planTransfer, flagged `correction`.
    */
-  W.planCorrection = function (v, target, t) {
+  W.planCorrection = function (v, target, t, wantOverride) {
     if (!target) return null;
-    const wantMiss = target.isVessel ? 0 : target.radius * 1.28;
+    const wantMiss = wantOverride != null ? wantOverride
+      : (target.isVessel ? 0 : target.radius * 1.28);
     const soi = target.isVessel ? (target.soi || 5000) : (target.soi || target.radius * 3);
     // look ahead one full lap of whatever path the craft is on now — the pass
     // we are trying to move has to happen inside that
@@ -682,9 +685,13 @@
       target.track = sampleTrack(target.x0, target.y0, target.vx0, target.vy0, t, span, 900);
     }
 
-    const sp = Math.hypot(v.vx, v.vy);
+    // "prograde" has to mean the same thing here as it does to the autopilot
+    // and the HUD: along the velocity relative to the sphere of influence
+    const ref = W.soiBody(v.x, v.y, t), refV = W.bodyVel(ref, t);
+    const rvx = v.vx - refV.x, rvy = v.vy - refV.y;
+    const sp = Math.hypot(rvx, rvy);
     if (sp < 1) return null;
-    const ux = v.vx / sp, uy = v.vy / sp;
+    const ux = rvx / sp, uy = rvy / sp;
 
     let best = null;
     const sweep = (centre, spread, n) => {
@@ -695,9 +702,14 @@
         if (!best || err < best.err) best = { err, dv, miss: r.miss, tArrive: r.tArrive };
       }
     };
-    sweep(0, 70, 29);
-    if (best) sweep(best.dv, 6, 9);
-    if (best) sweep(best.dv, 0.9, 7);
+    // Scale the net to the speeds involved. A trim on a coast needs a few m/s,
+    // but dropping out of a lunar orbit onto an Earth-bound path needs a good
+    // fraction of orbital speed, and a fixed ±70 m/s sweep can't see that far.
+    const reach = U.clamp(sp * 0.5, 70, 1200);
+    sweep(0, reach, 33);
+    if (best) sweep(best.dv, reach * 0.1, 11);
+    if (best) sweep(best.dv, reach * 0.012, 9);
+    if (best) sweep(best.dv, 0.8, 7);
     if (!best) return null;
 
     // keep the *current* pass too, so the caller can say whether burning helps
@@ -716,6 +728,103 @@
       burnX: v.x, burnY: v.y,
       pts: null
     };
+  };
+
+  /**
+   * The next low point (or high point) of the path we're on, relative to body
+   * b, found by propagating rather than from the osculating ellipse — so it
+   * survives the Moon's tug and a hand-off between spheres of influence, and
+   * works just as well on a hyperbolic arrival as on a closed orbit.
+   */
+  function apsisAhead(v, b, t0, span, wantApo) {
+    let x = v.x, y = v.y, vx = v.vx, vy = v.vy, t = t0;
+    const g = { x: 0, y: 0 };
+    W.gravity(x, y, t, g);
+    let ax = g.x, ay = g.y;
+    let pVr = null, pT = t0, pR = 0, pS = 0;
+    for (let i = 0; i < 4000 && t < t0 + span; i++) {
+      const bp = W.bodyPos(b, t), bv = W.bodyVel(b, t);
+      const dx = x - bp.x, dy = y - bp.y;
+      const r = Math.hypot(dx, dy) || 1;
+      const rvx = vx - bv.x, rvy = vy - bv.y;
+      const vr = (rvx * dx + rvy * dy) / r;                 // radial speed
+      const sp = Math.hypot(rvx, rvy);
+      if (pVr != null && (wantApo ? (pVr > 0 && vr <= 0) : (pVr < 0 && vr >= 0))) {
+        const f = (pVr - vr) !== 0 ? pVr / (pVr - vr) : 0;
+        return { t: pT + (t - pT) * f, r: pR + (r - pR) * f, speed: pS + (sp - pS) * f };
+      }
+      if (r < b.radius) return null;                        // we arrive the hard way first
+      pVr = vr; pT = t; pR = r; pS = sp;
+
+      // steps shrink as the craft dives in, so the crossing is pinned down
+      // finely exactly where it matters
+      const dt = U.clamp(U.TAU * Math.sqrt((r * r * r) / b.mu) / 220, 0.5, 600);
+      const nx = x + vx * dt + 0.5 * ax * dt * dt;
+      const ny = y + vy * dt + 0.5 * ay * dt * dt;
+      t += dt;
+      W.gravity(nx, ny, t, g);
+      vx += 0.5 * (ax + g.x) * dt; vy += 0.5 * (ay + g.y) * dt;
+      x = nx; y = ny; ax = g.x; ay = g.y;
+    }
+    return null;
+  }
+
+  /** the round orbit we aim to end up in around a given world */
+  W.captureRadius = function (b) {
+    return b.radius + (b.atmo ? b.atmo.height + 38000 : 25000);
+  };
+
+  /**
+   * "Get me into a low orbit around this world."
+   *
+   * Covers the three situations that all end the same way: a suborbital arc
+   * that needs its apoapsis burn to become an orbit, an arrival from elsewhere
+   * that needs catching at periapsis, and a craft somewhere unhelpful that
+   * needs a nudge now before either of those is on offer. Which apsis to burn
+   * at falls out of which one is already at a sensible height — raise or lower
+   * the other side to meet it and the orbit is round.
+   */
+  W.planCapture = function (v, b, t) {
+    if (!b || b.isVessel) return null;
+    if (v.landed) return { ok: false, reason: 'Get off the ground first.' };
+
+    const mu = b.mu;
+    const lo = b.radius + (b.atmo ? b.atmo.height + 5000 : 5000);
+    const hi = b.radius + (b.atmo ? b.atmo.height + 300000 : 200000);
+    const wantR = W.captureRadius(b);
+    const el = W.elements(b, v.x, v.y, v.vx, v.vy, t);
+
+    if (el.e < 0.06 && el.pe >= lo && el.ap <= hi) {
+      return {
+        ok: true, capture: true, done: true, target: b, dv: 0,
+        tBurn: t, wait: 0, travel: 0, intercept: true,
+        orbitAlt: el.a - b.seaLevel
+      };
+    }
+
+    const node = (n, kind) => {
+      const dv = Math.sqrt(mu / n.r) - n.speed;      // + prograde, − retrograde
+      return {
+        ok: true, capture: true, target: b, at: kind,
+        dv: Math.abs(dv), retro: dv < 0,
+        tBurn: n.t, wait: n.t - t, travel: 0,
+        orbitAlt: n.r - b.seaLevel,
+        periapsis: n.r - b.radius, wantAlt: wantR - b.radius,
+        intercept: true, pts: null
+      };
+    };
+
+    const span = U.clamp(isFinite(el.period) ? el.period * 1.05 : 6 * 3600, 900, 3 * 24 * 3600);
+    const pe = apsisAhead(v, b, t, span, false);
+    if (pe && pe.r >= lo && pe.r <= hi) return node(pe, 'periapsis');
+    const apo = apsisAhead(v, b, t, span, true);
+    if (apo && apo.r >= lo && apo.r <= hi) return node(apo, 'apoapsis');
+
+    // neither end of the path is anywhere near a low orbit — get one there
+    // first, then the capture burn above becomes available
+    const c = W.planCorrection(v, b, t, wantR);
+    if (c && c.ok) { c.capture = true; c.toOrbit = true; return c; }
+    return { ok: false, reason: 'No route into a low orbit from here. Try changing your orbit first.' };
   };
 
   /* ═══════════════════ ground scenery ═══════════════════ */

@@ -15,6 +15,7 @@
   const pointers = new Map();
   let pinchD = 0;
   let mapDrag = null;
+  let clickAt = null;              // where a flight-scene press started, to tell a click from a drag
   let missionBarTimer = 0;
 
   /* ═══════════════════ boot ═══════════════════ */
@@ -85,9 +86,11 @@
     document.body.classList.remove('hasMissions');
   }
 
-  // scrapping a craft that is still flying takes a confirming second click;
+  // Scrapping a craft that is still flying takes a confirming second click;
   // the widget repaints itself twice a second, so which button is armed has to
-  // live out here rather than on the button element itself
+  // live out here rather than on the button element itself. Keyed on the
+  // vessel itself — mission ids are not guaranteed unique across a resumed
+  // save, and keying on those armed every row that shared an id.
   let armedRecover = null, armedUntil = 0;
 
   function paintMissionBar() {
@@ -126,7 +129,7 @@
       // recovering a craft that is safely down closes the mission out and frees
       // one of the six mission slots; one that is still flying can be scrapped,
       // but only on a second click
-      const armed = armedRecover === v.mission.id && Date.now() < armedUntil;
+      const armed = armedRecover === v && Date.now() < armedUntil;
       const rec = document.createElement('button');
       rec.className = 'mRec' + (armed ? ' armed' : '');
       rec.textContent = armed ? 'Sure?' : (home ? '✔ Recover' : '✖ Scrap');
@@ -136,7 +139,7 @@
       rec.onclick = () => {
         if (S.audio) S.audio.ui();
         if (!home && !armed) {
-          armedRecover = v.mission.id;
+          armedRecover = v;
           armedUntil = Date.now() + 3000;
           paintMissionBar();
           return;
@@ -568,6 +571,41 @@
     if (chip) chip.classList.add('hidden');
   }
 
+  /* ═══════════════════ part chip (close-up flight view) ═══════════════════
+     Clicking a part of the craft you're flying opens the handful of things you
+     can do to it by hand. Right now that's cutting a parachute loose — worth
+     having the moment you're down, since a canopy still pulling will drag a
+     lander over. */
+
+  function showPartChip(ves, part, x, y) {
+    const chip = document.getElementById('vesselChip');
+    if (!chip) return;
+    chip.style.left = Math.min(cw - 190, Math.max(6, x + 10)) + 'px';
+    chip.style.top = Math.min(ch - 110, Math.max(6, y + 10)) + 'px';
+    chip.innerHTML = '';
+
+    const title = document.createElement('div');
+    title.className = 'vChipTitle';
+    title.textContent = part.def.name;
+    chip.appendChild(title);
+
+    const out = part.chuteOut || part.chute > 0.001;
+    const btn = document.createElement('button');
+    btn.textContent = '✂ Cut parachute';
+    btn.disabled = !out;
+    btn.title = out ? 'Release the canopy' : 'Nothing to cut — this one is still packed';
+    btn.onclick = () => { F.cutChute(ves, part); hideVesselChip(); };
+    chip.appendChild(btn);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.className = 'vChipClose';
+    closeBtn.onclick = hideVesselChip;
+    chip.appendChild(closeBtn);
+
+    chip.classList.remove('hidden');
+  }
+
   /* ═══════════════════ menu ═══════════════════ */
 
   function wireMenu() {
@@ -612,8 +650,9 @@
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (pointers.size === 2) { pinchD = pinchDist(); return; }
       if (scene === 'build') B.pointerDown(e.clientX, e.clientY, e.button);
-      else if (scene === 'flight' && R.cam.map) {
-        mapDrag = { x: e.clientX, y: e.clientY, ox: R.cam.offX || 0, oy: R.cam.offY || 0 };
+      else if (scene === 'flight') {
+        clickAt = { x: e.clientX, y: e.clientY };
+        if (R.cam.map) mapDrag = { x: e.clientX, y: e.clientY, ox: R.cam.offX || 0, oy: R.cam.offY || 0 };
         hideVesselChip();
       }
     });
@@ -649,12 +688,13 @@
         B.pointerUp();
         document.getElementById('palette').classList.remove('dropTarget');
       }
-      // a click (not a drag) in map view either opens the chip for a craft
+      // A click (not a drag) in map view either opens the chip for a craft
       // under the cursor (switch focus / set as rendezvous target), or —
-      // failing that — plans a transfer to whatever world is under it
-      if (scene === 'flight' && mapDrag && e.button !== 2) {
-        const moved = Math.hypot(e.clientX - mapDrag.x, e.clientY - mapDrag.y);
-        if (moved < 5) {
+      // failing that — plans a route to whatever world is under it. Close up,
+      // the same click picks a part of the craft you're flying.
+      if (scene === 'flight' && clickAt && e.button !== 2) {
+        const moved = Math.hypot(e.clientX - clickAt.x, e.clientY - clickAt.y);
+        if (moved < 5 && R.cam.map) {
           const ves = R.pickVessel(e.clientX, e.clientY, cw, ch, F.vessels);
           if (ves) {
             showVesselChip(ves, e.clientX, e.clientY);
@@ -664,9 +704,16 @@
             const b = R.pickBody(e.clientX, e.clientY, cw, ch, F.t);
             if (b) { F.setTarget(b); if (S.audio) S.audio.ui(); }
           }
+        } else if (moved < 5) {
+          const hit = R.pickPart(e.clientX, e.clientY, cw, ch, F.focus ? [F.focus] : []);
+          if (hit && hit.part.def.chute) {
+            showPartChip(hit.ves, hit.part, e.clientX, e.clientY);
+            if (S.audio) S.audio.ui();
+          } else hideVesselChip();
         }
       }
       mapDrag = null;
+      clickAt = null;
     };
     canvas.addEventListener('pointerup', up);
     canvas.addEventListener('pointercancel', up);

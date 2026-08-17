@@ -90,6 +90,15 @@
 
   let missionSeq = 1;
 
+  /** keep the mission-id counter past anything a resumed save restored —
+      otherwise the next launch is handed an id a live mission already has,
+      and everything keyed on it (the save's focus, the missions widget)
+      starts confusing one craft for another */
+  function seedMissionSeq(id) {
+    const n = parseInt(String(id).replace(/^m/, ''), 10);
+    if (n >= missionSeq) missionSeq = n + 1;
+  }
+
   /** Build a fresh vessel from a blueprint and sit it on the pad, nose
       straight up. Shared by a brand-new game, an additional launch
       alongside missions already flying, and a per-mission revert. */
@@ -238,11 +247,30 @@
     return true;
   };
 
+  /**
+   * Cut a canopy loose. Useful the moment you're down — a chute still pulling
+   * will drag a lander over — and as a last resort if one opens at the wrong
+   * time. The pack is spent afterwards; there's no repacking it in flight.
+   */
+  F.cutChute = function (v, p) {
+    if (!v || !p || !p.def.chute) return false;
+    if (!p.chuteOut && p.chute <= 0.001) { F.toast('That parachute is still packed', 'bad'); return false; }
+    if (!v.hasControl()) { F.toast('No command pod aboard to cut it', 'bad'); return false; }
+    p.chuteOut = false;
+    p.chute = 0;
+    p.cut = true;                       // staging can't redeploy a cut chute
+    const wp = v.worldOf(p, {});
+    if (S.fx) S.fx.puff(wp.x, wp.y, Math.max(2, p.def.chute.width * 0.35));
+    if (S.audio) S.audio.ui();
+    F.toast('Parachute cut');
+    return true;
+  };
+
   /* ═══════════════════ staging ═══════════════════ */
 
   F.stage = function (idx) {
     const v = F.focus;
-    if (!v || v.dead || F.over || !v.hasControl()) return;
+    if (!v || v.dead || F.over || !v.hasControl() || warpBlocked()) return;
     if (idx != null) {
       // jump straight to a chosen group
       if (idx < v.stageIdx || idx >= v.stages.length) return;
@@ -282,7 +310,7 @@
 
   F.setThrottle = function (t) {
     const v = F.focus;
-    if (v && v.hasControl()) v.throttle = U.clamp(t, 0, 1);
+    if (v && v.hasControl() && !warpBlocked()) v.throttle = U.clamp(t, 0, 1);
     F.syncThrottle();
   };
 
@@ -305,27 +333,48 @@
 
   F.setSas = function (mode) {
     const v = F.focus;
-    if (!v || !v.hasControl()) return;
+    if (!v || !v.hasControl() || warpBlocked()) return;
     v.sas = mode;
     if (mode !== 'off') v.sasTarget = v.angle;
     syncSasButtons(mode);
   };
 
   /**
+   * Two things take the controls away, and both used to do it silently.
+   *
    * Debris — a spent stage, or any piece with no command pod — can be flown
-   * along with: the camera follows it and the map draws its path. It has no
-   * brain, though, so every control is dead. Grey them out rather than leaving
-   * buttons that quietly do nothing.
+   * along with: the camera follows it and the map draws its path, but there is
+   * no brain aboard to steer with. And above 500× the sim runs on rails, where
+   * craft only slide along their orbits: thrust and steering do nothing at all
+   * there. Either way the controls go grey and say which it is.
    */
   function syncControlLock() {
     const v = F.focus;
-    const locked = !!v && !v.hasControl();
+    const debris = !!v && !v.hasControl();
+    const warped = F.warpIdx >= RAILS_FROM;
     const ctr = document.getElementById('controls');
     const sas = document.getElementById('sasWrap');
     const note = document.getElementById('noCtrl');
-    if (ctr) ctr.classList.toggle('locked', locked);
-    if (sas) sas.classList.toggle('locked', locked);
-    if (note) note.classList.toggle('hidden', !locked);
+    if (ctr) ctr.classList.toggle('locked', debris || warped);
+    if (sas) sas.classList.toggle('locked', debris || warped);
+    if (note) {
+      note.classList.toggle('hidden', !(debris || warped));
+      note.textContent = debris
+        ? 'Debris — no command pod aboard, so there is nothing to steer with'
+        : 'Time warp ' + WARPS[F.warpIdx] + '× — controls are off until you slow down (,)';
+    }
+  }
+
+  /** true when the controls are inert because of time warp — and says so, at
+      most every few seconds, so a player pressing keys isn't left guessing */
+  let warpWarn = 0;
+  function warpBlocked() {
+    if (F.warpIdx < RAILS_FROM) return false;
+    if (hudActive && warpWarn <= 0) {
+      warpWarn = 4;
+      F.toast('Controls are off at ' + WARPS[F.warpIdx] + '× — press , to slow the time warp', 'bad');
+    }
+    return true;
   }
 
   F.cycleSas = function () {
@@ -342,6 +391,7 @@
     F.warpIdx = i;
     const d = document.getElementById('warpDisp');
     if (d) d.textContent = WARPS[i] + '×';
+    syncControlLock();          // rails warp greys the controls out
   };
 
   function maxWarpIdx() {
@@ -404,6 +454,7 @@
     const warp = WARPS[F.warpIdx];
     const rails = F.warpIdx >= RAILS_FROM;
 
+    if (warpWarn > 0) warpWarn -= real;
     if (v && !F.over && hudActive) applyInput(v, real);
 
     const simDt = dt * warp;
@@ -504,9 +555,32 @@
           if (replanIn <= 0) F.replan();
         }
         if (replanCool > 0) replanCool -= real;
-        if (!burn && replanIn <= 0 && replanCool <= 0 &&
-          F.plan && F.plan.ok && F.t - F.plan.tBurn > 45) {
-          replanCool = 6;              // real seconds — planning is not cheap
+        // A correction or a capture node is cheap to work out (~5 ms) and goes
+        // stale quickly as the craft falls, so it refreshes on a short leash —
+        // otherwise the player lines up on a figure that was true a minute ago
+        // and always ends up a little short. A full transfer search costs four
+        // times as much and only needs redoing once its window has slipped by.
+        const p = F.plan;
+        const cheap = !!(p && p.ok && (p.correction || p.capture));
+        // A cheap plan goes stale by *age* — it describes a burn from where the
+        // craft is right now. A transfer plan describes a window in the future
+        // and must be left alone until that window has actually gone by;
+        // ageing those out too would keep sliding the countdown forward and it
+        // would never reach zero.
+        const since = cheap
+          ? F.t - (p && p.madeAt != null ? p.madeAt : F.t)
+          : F.t - (p ? p.tBurn : 0);
+        // Hands off once the node is nearly here. Re-solving a capture in the
+        // last few seconds can hand back a completely different burn — the
+        // node it was aiming at slips behind the craft and the next one is an
+        // orbit away — and the player, already lined up and reaching for the
+        // throttle, would burn that instead. Whatever we told them to do is
+        // what stands until the burn is over.
+        const node = !!(p && p.ok && p.tBurn > (p.madeAt || 0) + 1);
+        const imminent = node && p.tBurn - F.t < burnLead() + 25;
+        if (!burn && !imminent && replanIn <= 0 && replanCool <= 0 && p && p.ok &&
+          since > (cheap ? 8 : 45)) {
+          replanCool = cheap ? 1.5 : 6;          // real seconds
           F.replan();
         }
       }
@@ -516,6 +590,10 @@
   function applyInput(v, real) {
     if (!v.hasControl()) return;
     const k = F.keys;
+    const held = k.a || k.d || k.w || k.s ||
+      k.arrowleft || k.arrowright || k.arrowup || k.arrowdown;
+    if (held && warpBlocked()) { v.steer = 0; return; }
+
     let steer = 0;
     if (k.a || k.arrowleft) steer += 1;
     if (k.d || k.arrowright) steer -= 1;
@@ -664,17 +742,39 @@
       if (b === F.focus) { F.toast("Can't target your own craft", 'bad'); return; }
       const d = Math.hypot(b.x - F.focus.x, b.y - F.focus.y);
       if (d < 5000) { F.toast('You are already at ' + F.targetName(b), 'bad'); return; }
-    } else if (b === W.soiBody(F.focus.x, F.focus.y, F.t) && !b.orbit) {
-      F.toast('You are already orbiting ' + b.name, 'bad');
-      return;
+    } else if (!b.orbit) {
+      // the world everything else goes round: targeting it means "plan me into
+      // a low orbit around it", which is useful from anywhere but the pad
+      if (F.focus.landed) { F.toast('Get off the ground first', 'bad'); return; }
     }
     F.target = b;
     F.replan();
   };
 
+  /** every plan carries when it was worked out, so the loop above can tell a
+      fresh one from a stale one whatever kind it is */
+  function stamped(p) {
+    if (p) p.madeAt = F.t;
+    return p;
+  }
+
   F.replan = function () {
-    if (!F.target || !F.focus || F.focus.dead) { F.plan = null; F.paintXfer(); return; }
-    if (arrived(F.focus)) { F.paintXfer(); return; }     // nothing left to plan
+    const v = F.focus;
+    if (!F.target || !v || v.dead) { F.plan = null; F.paintXfer(); return; }
+    if (arrived(v)) { F.paintXfer(); return; }           // rendezvous done
+
+    // Within the target world's own sphere of influence — or targeting the
+    // world everything else orbits, which we are always inside — the job is no
+    // longer "get there" but "settle into a low orbit around it".
+    if (!F.isVesselTarget(F.target)) {
+      const b = F.target;
+      if (!b.orbit || W.soiBody(v.x, v.y, F.t) === b) {
+        F.plan = stamped(W.planCapture(v, b, F.t));
+        F.paintXfer();
+        return;
+      }
+    }
+
     // a vessel target has no closed-form orbit — hand the planner a fresh
     // propagated snapshot of it each time, since it may have moved since
     // the last replan
@@ -682,11 +782,11 @@
     // Already on our way? Then the useful answer is the nudge that fixes where
     // we arrive, not a brand-new departure window days from now.
     const ap = liveApproach();
-    if (ap && ap.inSoi && !F.focus.landed) {
-      const c = W.planCorrection(F.focus, tg, F.t);
-      if (c) { F.plan = c; F.paintXfer(); return; }
+    if (ap && ap.inSoi && !v.landed) {
+      const c = W.planCorrection(v, tg, F.t);
+      if (c) { F.plan = stamped(c); F.paintXfer(); return; }
     }
-    F.plan = W.planTransfer(F.focus, tg, F.t);
+    F.plan = stamped(W.planTransfer(v, tg, F.t));
     F.paintXfer();
   };
 
@@ -699,6 +799,9 @@
     const tg = F.target;
     if (!tg) return null;
     if (!F.isVesselTarget(tg)) {
+      // "closest approach" means nothing for the world we are already going
+      // round — that one is handled as a capture, not a transfer
+      if (!tg.orbit) return null;
       return { posAt: tt => W.bodyPos(tg, tt), radius: tg.radius, soi: tg.soi || tg.radius * 2.5 };
     }
     // a craft has no closed-form orbit, so reuse the propagated track the
@@ -708,12 +811,13 @@
     return { posAt: tt => wrap.track.at(tt), radius: Math.max(8, tg.radius()), soi: wrap.soi || 5000 };
   }
 
-  /** have we actually got where we were going? */
+  /** have we actually got where we were going? (worlds report this through
+      the capture plan's `done` flag instead — being in the neighbourhood of a
+      world isn't the same as being in orbit around it) */
   function arrived(v) {
     const tg = F.target;
-    if (!tg || !v) return false;
-    if (F.isVesselTarget(tg)) return Math.hypot(tg.x - v.x, tg.y - v.y) < 3000;
-    return W.soiBody(v.x, v.y, F.t) === tg;
+    if (!tg || !v || !F.isVesselTarget(tg)) return false;
+    return Math.hypot(tg.x - v.x, tg.y - v.y) < 3000;
   }
 
   /** closest approach along the currently predicted path, or null if we're
@@ -790,7 +894,10 @@
     const p = F.plan;
     if (!p || !p.ok || !F.focus) return 0;
     const s = burnSeconds(F.focus, p.dv);
-    return s ? Math.min(s / 2, p.travel * 0.25) : 0;
+    // a capture burn happens *at* its node with no travel to speak of, so the
+    // only sensible cap there is half the burn itself
+    const cap = p.travel > 0 ? p.travel * 0.25 : Infinity;
+    return s ? Math.min(s / 2, cap) : 0;
   }
 
   /** seconds of burn needed at full throttle to deliver the planned Δv */
@@ -814,21 +921,26 @@
     if (tip) tip.classList.toggle('hidden', !S.render.cam.map || !!F.target);
     if (!F.target) { panel.classList.add('hidden'); return; }
     panel.classList.remove('hidden');
-    document.getElementById('xTitle').textContent = 'TRANSFER → ' + F.targetName(F.target).toUpperCase();
 
     const body = document.getElementById('xBody');
     const pro = document.getElementById('xPro');
     const p = F.plan;
     const v = F.focus;
+    const heading = (p && p.capture) ? 'ORBIT → ' : 'TRANSFER → ';
+    document.getElementById('xTitle').textContent = heading + F.targetName(F.target).toUpperCase();
 
     // got there: stop offering routes to somewhere we already are, and say
     // what to do next instead
     if (v && arrived(v)) {
       body.innerHTML = '<div class="go ok">Arrived at ' + F.targetName(F.target) + '</div>' +
-        '<div class="note">' + (F.isVesselTarget(F.target)
-          ? 'Close the last of the gap on <b>retrograde</b> to match speed.'
-          : 'Burn <b>retrograde</b> at the low point to circularise, or keep burning to land.') +
-        '</div>';
+        '<div class="note">Close the last of the gap on <b>retrograde</b> to match speed.</div>';
+      if (pro) pro.classList.add('hidden');
+      return;
+    }
+    if (p && p.done) {
+      body.innerHTML = '<div class="go ok">In a low orbit around ' + F.targetName(F.target) + '</div>' +
+        '<div class="note">Circular at ' + U.dist(Math.max(0, p.orbitAlt)) +
+        ' — nothing left to burn. Point retrograde and burn again when you want to come down.</div>';
       if (pro) pro.classList.add('hidden');
       return;
     }
@@ -866,34 +978,45 @@
       if (worthIt) {
         h += row('Correction', U.speed(p.dv) + ' ' + aim.toLowerCase())
           + (secs != null ? row('Burn for', secs.toFixed(1) + ' s') : '')
-          + row('Would arrive at', p.periapsis <= 0 ? 'impact' : U.dist(Math.max(0, p.periapsis)));
+          + row(p.toOrbit ? 'Pass becomes' : 'Would arrive at',
+            p.periapsis <= 0 ? 'impact' : U.dist(Math.max(0, p.periapsis)));
       }
+    } else if (p.capture) {
+      h += row('Burn at ' + (p.at || 'apsis'), left > 0 ? U.time(left) : 'now')
+        + row('Δv needed', U.speed(p.dv))
+        + (secs != null ? row('Burn for', secs.toFixed(1) + ' s') : '')
+        + row('Leaves you at', U.dist(Math.max(0, p.orbitAlt)));
     } else {
       h += row('Burn in', left > 0 ? U.time(left) : 'now')
         + row('Δv needed', U.speed(p.dv))
         + (secs != null ? row('Burn for', secs.toFixed(1) + ' s') : '');
     }
-    if (ap) {
-      h += row('Closest pass', ap.alt <= 0 ? 'impact' : U.dist(ap.alt), 'live')
-        + row('Arrives in', U.time(Math.max(0, ap.eta)), 'live');
-    } else {
-      h += row('Travel time', U.time(p.travel))
-        + row(p.intercept ? 'Arrival alt' : 'Miss by',
-          p.periapsis <= 0 ? 'impact' : U.dist(Math.max(0, p.periapsis)));
+    if (!p.capture) {
+      if (ap) {
+        h += row('Closest pass', ap.alt <= 0 ? 'impact' : U.dist(ap.alt), 'live')
+          + row('Arrives in', U.time(Math.max(0, ap.eta)), 'live');
+      } else {
+        h += row('Travel time', U.time(p.travel))
+          + row(p.intercept ? 'Arrival alt' : 'Miss by',
+            p.periapsis <= 0 ? 'impact' : U.dist(Math.max(0, p.periapsis)));
+      }
     }
 
     if (burn) {
       h += '<div class="go hot">BURNING — hold ' + aim.toLowerCase() + ' until Δv hits zero</div>';
     } else if (p.correction) {
       h += worthIt
-        ? '<div class="go hot">TRIM NOW — point <b>' + aim + '</b> and tap the throttle</div>'
+        ? '<div class="go hot">' + (p.toOrbit ? 'BURN NOW' : 'TRIM NOW') +
+          ' — point <b>' + aim + '</b> and hold it</div>'
         : '<div class="go ok">On course for ' + name + '</div>';
-    } else if (ap && ap.inSoi) {
+    } else if (!p.capture && ap && ap.inSoi) {
+      // (a capture plan is past "on course" — it's the arrival burn itself,
+      // and it needs its own countdown, not a reassuring green banner)
       h += '<div class="go ok">On course for ' + name + '</div>';
     } else if (left > 6) {
-      h += '<div class="go">Point <b>Prograde</b>, then throttle up at zero</div>';
+      h += '<div class="go">Point <b>' + aim + '</b>, then throttle up at zero</div>';
     } else if (left > -Math.max(20, (secs || 20) * 1.5)) {
-      h += '<div class="go hot">BURN NOW — prograde, full throttle</div>';
+      h += '<div class="go hot">BURN NOW — ' + aim.toLowerCase() + ', full throttle</div>';
     } else {
       h += '<div class="go">Window passed — replanning…</div>';
     }
@@ -905,7 +1028,11 @@
         U.speed(p.dv) + '. Stage first, or expect to come up short.</div>';
     }
 
-    if (ap && ap.inSoi && !worthIt) {
+    if (p.capture && p.at) {
+      h += '<div class="note">' + (p.at === 'apoapsis'
+        ? 'Burning at the high point lifts the other side of the orbit up to meet it.'
+        : 'Burning at the low point pulls the far side of the orbit down to meet it.') + '</div>';
+    } else if (ap && ap.inSoi && !worthIt) {
       h += '<div class="note">' + (F.isVesselTarget(F.target)
         ? 'Coast in, then burn retrograde as you close, to match speed.'
         : 'Coast in, then burn <b>retrograde</b> at the closest point to drop into orbit around ' +
@@ -997,16 +1124,25 @@
   F.hud = function () {
     const v = F.focus;
     if (!v) return;
+    // altitude is measured against the ground we could hit; speed against the
+    // world whose gravity we are actually orbiting. Those are the same body
+    // almost everywhere, and where they differ (the wide band near the Moon
+    // that is still Earth's sphere of influence) each reading is the one that
+    // matters — and speed now matches what the autopilot calls prograde.
     const b = v.nearBody || W.earth;
-    const bp = W.bodyPos(b, F.t), bv = W.bodyVel(b, F.t);
+    const rb = v.refBody || b;
+    const bp = W.bodyPos(b, F.t);
     const dx = v.x - bp.x, dy = v.y - bp.y;
     const r = Math.hypot(dx, dy) || 1;
     const gi = W.terrain(b, Math.atan2(dy, dx));
     const agl = r - gi, asl = r - b.seaLevel;
 
+    const rp = W.bodyPos(rb, F.t), bv = W.bodyVel(rb, F.t);
+    const sdx = v.x - rp.x, sdy = v.y - rp.y;
+    const sr = Math.hypot(sdx, sdy) || 1;
     const rvx = v.vx - bv.x, rvy = v.vy - bv.y;
     const spd = Math.hypot(rvx, rvy);
-    const vs = (rvx * dx + rvy * dy) / r;
+    const vs = (rvx * sdx + rvy * sdy) / sr;
 
     set('hAlt', (agl < 20000 ? U.dist(agl) + ' AGL' : U.dist(asl)));
     set('hSpd', U.speed(spd));
@@ -1177,7 +1313,7 @@
     let dropped = 0;
     for (const vs of st.vessels) {
       const v = S.vessel.fromState(vs);
-      if (v) F.vessels.push(v); else dropped++;
+      if (v) { F.vessels.push(v); if (v.mission) seedMissionSeq(v.mission.id); } else dropped++;
       // keep the uid counter (shared with the VAB) past anything we just restored
       for (const p of vs.parts) S.vessel.seedUid(p.uid);
     }

@@ -66,6 +66,44 @@
     return best;
   };
 
+  /** screen point → world point, through whichever camera is live */
+  R.screenToWorld = function (sx, sy, cw, ch) {
+    const z = cam.map ? cam.mapZoom : cam.zoom;
+    const u = (sx - cw / 2) / z, w = (sy - ch / 2) / z;
+    if (cam.map) return { x: cam.x + u, y: cam.y - w };
+    // the close-up transform is its own inverse (see setWorldTf): a rotation
+    // composed with a y-flip
+    const c = Math.cos(cam.rot), s = Math.sin(cam.rot);
+    return { x: cam.x + c * u - s * w, y: cam.y - s * u - c * w };
+  };
+
+  /** which part of which craft sits under this screen point, close up */
+  R.pickPart = function (sx, sy, cw, ch, vessels) {
+    if (cam.map || !vessels) return null;
+    const w = R.screenToWorld(sx, sy, cw, ch);
+    const pad = Math.min(1.2, 8 / cam.zoom);          // a little slack for fat fingers
+    for (const ves of vessels) {
+      if (ves.dead) continue;
+      if (Math.hypot(w.x - ves.x, w.y - ves.y) > ves.radius() + pad) continue;
+      const ca = Math.cos(ves.angle), sa = Math.sin(ves.angle);
+      const dx = w.x - ves.x, dy = w.y - ves.y;
+      const lx = dx * ca + dy * sa + ves.com.x;       // world → the craft's own axes
+      const ly = -dx * sa + dy * ca + ves.com.y;
+      // take the part the point sits deepest inside, not merely the first one
+      // it grazes — with any slack at all a tall neighbour swallows the click
+      let best = null, bestScore = Infinity;
+      for (const p of ves.parts) {
+        const ex = Math.abs(lx - p.lx) - p.def.w / 2;
+        const ey = Math.abs(ly - p.ly) - p.def.h / 2;
+        if (ex > pad || ey > pad) continue;
+        const score = Math.max(ex, ey);              // negative ⇒ genuinely inside
+        if (score < bestScore) { bestScore = score; best = p; }
+      }
+      if (best) return { ves, part: best };
+    }
+    return null;
+  };
+
   /** main.js hands us the canvas size so callers that don't already have it
       on hand (e.g. flight.js's off-screen checks) can still ask for it */
   R.setSize = function (w, h) { R._cw = w; R._ch = h; };
@@ -171,11 +209,19 @@
       ctx.fillRect(0, 0, cw, ch);
       return;
     }
+    // atmoF falls off linearly with altitude and still reaches zero exactly at
+    // the top of the atmosphere, so "space starts here" hasn't moved. What the
+    // exponents do is bend the *colour* down faster than the altitude: raising
+    // them (they used to be well under 1, which held the sky bright almost all
+    // the way up) darkens the whole upper half of the climb into a long,
+    // gradual fade instead of a bright sky that snaps to black near the top.
+    // The horizon glow fades slowest, which is how a real high-altitude sky
+    // looks — dark overhead, a bright band still hugging the limb.
     const c = W.earth.col;
     const g = ctx.createLinearGradient(0, 0, 0, ch);
-    g.addColorStop(0, U.mix('#05070f', c.skyHi, Math.pow(atmoF, 0.55)));
-    g.addColorStop(0.62, U.mix('#05070f', c.sky, Math.pow(atmoF, 0.42)));
-    g.addColorStop(1, U.mix('#05070f', c.glow, Math.pow(atmoF, 0.3)));
+    g.addColorStop(0, U.mix('#05070f', c.skyHi, Math.pow(atmoF, 2.6)));
+    g.addColorStop(0.62, U.mix('#05070f', c.sky, Math.pow(atmoF, 2.0)));
+    g.addColorStop(1, U.mix('#05070f', c.glow, Math.pow(atmoF, 1.3)));
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, cw, ch);
   }
@@ -1242,7 +1288,8 @@
   function drawVelocityMarker(ctx, cw, ch, dpr, G) {
     const v = G.focus;
     if (!v) return;
-    const b = v.nearBody || W.earth;
+    // same frame the HUD and the autopilot use: the sphere of influence
+    const b = v.refBody || v.nearBody || W.earth;
     const bv = W.bodyVel(b, G.t);
     const rvx = v.vx - bv.x, rvy = v.vy - bv.y;
     const spd = Math.hypot(rvx, rvy);
@@ -1323,7 +1370,9 @@
     const atmoF = v ? W.atmoFrac(W.earth, v.altASL == null ? 1e9 : v.altASL) : 0;
 
     drawSky(ctx, cw, ch, dpr, atmoF);
-    drawStars(ctx, cw, ch, dpr, U.clamp(1 - atmoF * 1.35, 0, 1), t, cam.rot);
+    // stars come out to match the darkening sky above, rather than staying
+    // hidden until the very top of the atmosphere
+    drawStars(ctx, cw, ch, dpr, U.clamp(1 - Math.pow(atmoF, 1.7) * 1.25, 0, 1), t, cam.rot);
 
     setWorldTf(ctx, cw, ch, dpr, cam.zoom, cam.rot);
     const viewR = R.viewR(cw, ch);
