@@ -362,7 +362,7 @@
     /* ── resting ── */
     const bv = W.bodyVel(near, t);
     const relS = Math.hypot(v.vx - bv.x, v.vy - bv.y);
-    v.landed = contacts > 0 && relS < 2.0;
+    v.landed = (contacts > 0 || v.inWater) && relS < 2.0;
     if (v.landed && relS < 0.45 && Math.abs(v.omega) < 0.06 && !liveThrust) {
       v.vx += (bv.x - v.vx) * 0.25;
       v.vy += (bv.y - v.vy) * 0.25;
