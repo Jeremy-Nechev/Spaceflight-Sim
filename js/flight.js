@@ -370,8 +370,15 @@
     F.predictOthers(real);
 
     if (hudActive) {
+      // a vessel target that crashed or got pruned is gone — drop it instead
+      // of planning a rendezvous with wreckage
+      if (F.target && F.isVesselTarget(F.target) && (F.target.dead || F.vessels.indexOf(F.target) < 0)) {
+        F.toast('Target lost', 'bad');
+        F.target = null; F.plan = null;
+      }
+
       hudTimer -= real;
-      if (hudTimer <= 0) { F.hud(); if (F.target) F.paintXfer(); hudTimer = 1 / 15; }
+      if (hudTimer <= 0) { F.hud(); if (F.target) F.paintXfer(); else F.paintXfer(); hudTimer = 1 / 15; }
 
       // planning is expensive, so only redo it when the orbit has actually
       // changed — i.e. shortly after a burn ends
