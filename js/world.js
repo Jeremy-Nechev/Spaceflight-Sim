@@ -488,15 +488,70 @@
     let wait = U.wrap(phiReq - U.wrap(thT - thC)) / (nC - nT);
     while (wait < 0) wait += syn;
 
+    // A vessel sitting in a near-identical orbit (nC≈nT — the natural case
+    // for two craft launched into similar orbits) makes `syn` enormous, so
+    // the natural-drift `wait` above can come out to days or years even
+    // though the geometry is otherwise perfectly ordinary. Tracking a target
+    // accurately that far out isn't practical with a fixed sample budget —
+    // the target completes so many of its own orbits between samples that
+    // interpolating its position stops meaning anything — so rather than
+    // hand back a plan that's silently wrong at that range, say so plainly:
+    // matching orbits this closely needs a deliberate altitude change first,
+    // same as it would for a real rendezvous.
+    if (target.isVessel && wait > 4 * 24 * 3600) {
+      return { ok: false, reason: 'Your orbit is almost identical to ' + target.name + "'s — natural drift would take days. Raise or lower your orbit a little, then recalculate." };
+    }
+
     const vNow = Math.sqrt(mu * (2 / el.r - 1 / el.a));
     const dv0 = Math.sqrt(mu * (2 / el.r - 1 / at)) - vNow;
     const period = el.period;
     const span = tTrans * 2.2;
 
-    // give a vessel target a propagated position track covering the whole
-    // window search() might probe, so flyToward can just interpolate
+    // Tuning for the coarse sweep below, decided here (before it runs) so the
+    // vessel-target position track can be sized to actually cover it.
+    //
+    // For a body target the Δv-sweep-width-proportional-to-dv0 approach is
+    // fine because r1 and r2 (craft orbit vs. e.g. the Moon's orbit) are
+    // wildly different, so dv0 is comfortably large. A vessel target's most
+    // common real case is the opposite: rendezvousing with another craft in
+    // a near-identical orbit (nC≈nT). There, dv0 collapses toward zero, so a
+    // spread *proportional to dv0* collapses right along with it — the coarse
+    // pass ends up probing a sliver of burn sizes near zero and can never
+    // discover that a deliberately larger phasing burn reaches the target far
+    // better than the near-null "Hohmann" the seed suggests. Floor it, for
+    // vessel targets only, so body/Moon transfers keep their existing,
+    // already-tuned behaviour untouched.
+    const dvSpread0 = target.isVessel ? Math.max(dv0 * 0.18, vNow * 0.02, 2) : dv0 * 0.18;
+    // Near-resonant orbits (nC≈nT — a co-orbital rendezvous, the single most
+    // common real vessel-target case) can genuinely need a wait spanning a
+    // large slice of the synodic period before the phase lines up, since a
+    // craft this close to the target's own period drifts past it only very
+    // slowly. `period*0.35` covers well under one orbit in that case — nowhere
+    // near enough. Widen toward the synodic period itself when it's
+    // meaningfully larger than the craft's own orbit, capped so the coarse
+    // grid doesn't get so sparse it stops resolving anything.
+    const tSpread0 = target.isVessel
+      ? Math.max(period * 0.35, Math.min(syn * 0.5, period * 8))
+      : period * 0.35;
+    const nT0 = target.isVessel ? 21 : 11, nD0 = target.isVessel ? 15 : 9;
+
+    // Give a vessel target a propagated position track covering the whole
+    // window search() might probe, so flyToward can just interpolate.
+    // search() runs three nested passes (spreads of tSpread0, then 0.07,
+    // then 0.015 of `period`, each recentred on the previous best), so the
+    // burn time it tries can walk a little past a single-pass estimate of
+    // `wait` — and each candidate's flyToward then flies another full `span`
+    // past that before giving up. Undershooting the true worst case let
+    // queries run past the sampled track's end, where .at() clamps to the
+    // last sample and effectively freezes the target in place — which was
+    // quietly corrupting the search into optimizing against a stale position
+    // instead of the real one. Rather than stack up the exact worst-case
+    // fractions across all three passes, just use a generous flat margin
+    // on top of the (now much wider, for a near-resonant orbit) tSpread0.
     if (target.isVessel) {
-      target.track = sampleTrack(target.x0, target.y0, target.vx0, target.vy0, t, wait + span, 400);
+      const trackSpan = wait + tSpread0 + span + period * 0.5 + 900;
+      const samples = Math.min(2000, Math.max(400, Math.ceil(trackSpan / 20)));
+      target.track = sampleTrack(target.x0, target.y0, target.vx0, target.vy0, t, trackSpan, samples);
     }
 
     // ── refine: propagate once per candidate burn time, then try burn sizes ──
@@ -518,11 +573,9 @@
         }
       }
     };
-
-    // coarse sweep around the analytic guess, then tighten twice
-    search(t + wait, period * 0.35, dv0, dv0 * 0.18, 11, 9);
-    if (best) search(best.tBurn, period * 0.07, best.dv, best.dv * 0.05, 7, 7);
-    if (best) search(best.tBurn, period * 0.015, best.dv, best.dv * 0.012, 5, 5);
+    search(t + wait, tSpread0, dv0, dvSpread0, nT0, nD0);
+    if (best) search(best.tBurn, period * 0.07, best.dv, Math.max(best.dv * 0.05, dvSpread0 * 0.1), 7, 7);
+    if (best) search(best.tBurn, period * 0.015, best.dv, Math.max(best.dv * 0.012, dvSpread0 * 0.02), 5, 5);
     if (!best) return { ok: false, reason: 'Could not find a transfer from this orbit.' };
 
     // final pass, keeping the path for the map

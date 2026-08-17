@@ -15,6 +15,7 @@
   const pointers = new Map();
   let pinchD = 0;
   let mapDrag = null;
+  let missionBarTimer = 0;
 
   /* ═══════════════════ boot ═══════════════════ */
 
@@ -34,6 +35,17 @@
     const saved = U.store.get('lastBlueprint', null);
     B.load(saved || B.presets()[0]);
     renderProgress();
+
+    // resume a paused game if one exists — stay on the menu either way, so
+    // the player picks which mission (if more than one) to jump back into
+    // via the mission bar rather than being dropped straight into flight
+    F.loadGame();
+    paintMissionBar();
+
+    // autosave periodically and on the way out, so "pause and come back
+    // later" survives a tab close, not just an in-session scene switch
+    setInterval(() => F.saveGame(), 20000);
+    window.addEventListener('beforeunload', () => F.saveGame());
 
     requestAnimationFrame(loop);
   }
@@ -55,10 +67,56 @@
     document.getElementById('menu').classList.toggle('hidden', s !== 'menu');
     document.getElementById('buildUI').classList.toggle('hidden', s !== 'build');
     document.getElementById('flightUI').classList.toggle('hidden', s !== 'flight');
+    F.setSceneActive(s === 'flight');
     if (s === 'build') { B.fit(); refreshStats(); refreshStageEdit(); }
     if (s === 'menu') renderProgress();
+    if (s !== 'flight') paintMissionBar(); else hideMissionBar();
   }
   S.setScene = setScene;
+
+  /* ═══════════════════ mission bar (VAB/menu) ═══════════════════
+     A minimal readout of every active, tagged mission so the player can jump
+     back into a specific background flight from the VAB or main menu — the
+     only new UI surface requirement 3 needs. */
+
+  function hideMissionBar() {
+    const bar = document.getElementById('missionBar');
+    if (bar) bar.classList.add('hidden');
+  }
+
+  function paintMissionBar() {
+    const bar = document.getElementById('missionBar');
+    if (!bar) return;
+    const missions = F.vessels.filter(v => v.mission);
+    if (!missions.length) { bar.classList.add('hidden'); return; }
+    bar.classList.remove('hidden');
+    bar.innerHTML = '';
+    const head = document.createElement('div');
+    head.className = 'missionBarHead';
+    head.textContent = 'ACTIVE MISSIONS';
+    bar.appendChild(head);
+    for (const v of missions) {
+      const row = document.createElement('div');
+      row.className = 'missionRow' + (v === F.focus ? ' current' : '');
+      const b = v.nearBody || S.world.earth;
+      const el = S.world.elements(b, v.x, v.y, v.vx, v.vy, F.t);
+      const status = v.landed ? 'landed on ' + b.name
+        : (el.e < 1 ? 'orbiting ' + b.name : 'near ' + b.name);
+      const fuel = v.fuelGroups ? v.fuelGroups() : [];
+      const pct = fuel.length ? Math.round(100 * fuel.reduce((s, g) => s + g.cur, 0) / Math.max(1, fuel.reduce((s, g) => s + g.cap, 0))) : null;
+      row.innerHTML = '<span class="mName">' + (v.mission.name || 'Rocket') + '</span>' +
+        '<span class="mStat">' + status + (pct != null ? ' · ' + pct + '% fuel' : '') + '</span>';
+      const btn = document.createElement('button');
+      btn.textContent = 'Fly ▶';
+      btn.onclick = () => {
+        if (v !== F.focus) F.setFocus(v);
+        setScene('flight');
+        if (S.audio) S.audio.ui();
+      };
+      row.appendChild(btn);
+      bar.appendChild(row);
+    }
+  }
 
   /* ═══════════════════ loop ═══════════════════ */
 
@@ -68,15 +126,25 @@
     if (!last || dt > 0.25 || dt <= 0) dt = 1 / 60;
     last = now;
 
+    // simulation always runs — a launched craft keeps flying whether the
+    // player is looking at the flight scene, the VAB, or the menu. Only
+    // rendering (and the HUD/audio F.update itself gates internally) is
+    // scene-dependent.
+    F.update(dt, dt);
+
     if (scene === 'flight') {
-      F.update(dt, dt);
       R.follow(F.focus, F.t, dt);
       R.frame(ctx, cw, ch, dpr, {
         t: F.t, vessels: F.vessels, focus: F.focus, path: F.path, el: F.el,
-        plan: F.plan, targetBody: F.target
+        plan: F.plan, target: F.target
       });
     } else {
       B.draw(ctx, cw, ch, dpr);
+      // rebuilding the mission bar's DOM every frame tears down whatever the
+      // player is about to click (buttons go stale mid-click) for no visible
+      // benefit — a few times a second is plenty to keep it live
+      missionBarTimer -= dt;
+      if (missionBarTimer <= 0) { paintMissionBar(); missionBarTimer = 0.5; }
     }
     requestAnimationFrame(loop);
   }
@@ -289,7 +357,10 @@
     if (!s.count) { F.toast('Build something first!', 'bad'); return; }
     const bp = B.blueprint();
     U.store.set('lastBlueprint', bp);
-    if (F.launch(bp)) {
+    // a game already in progress gets a new craft added alongside whatever's
+    // already flying; otherwise this is the first launch of a new game
+    const ok = F.running ? F.launchAdditional(bp) : F.launch(bp);
+    if (ok) {
       setScene('flight');
       F.toast('Throttle is at ' + Math.round(F.focus.throttle * 100) + '%. Press Space to launch');
     }
@@ -397,8 +468,61 @@
       const scr = Math.max(320, Math.min(cw, ch));   // never 0 before first resize
       R.cam.mapZoomT = R.cam.mapZoom =
         U.clamp(0.42 * scr / r, R.cam.mapMin, R.cam.mapMax);
+    } else {
+      hideVesselChip();
     }
     F.paintXfer();
+  }
+
+  /* ═══════════════════ vessel chip (map view) ═══════════════════
+     Clicking another craft on the map is ambiguous — switch to flying it, or
+     aim a rendezvous at it? — so a click just opens this small chip with both
+     options spelled out, rather than guessing from the gesture. */
+
+  function showVesselChip(ves, x, y) {
+    const chip = document.getElementById('vesselChip');
+    if (!chip) return;
+    chip.style.left = Math.min(cw - 190, Math.max(6, x + 10)) + 'px';
+    chip.style.top = Math.min(ch - 110, Math.max(6, y + 10)) + 'px';
+    chip.innerHTML = '';
+
+    const title = document.createElement('div');
+    title.className = 'vChipTitle';
+    title.textContent = ves.mission ? ves.mission.name : 'Debris';
+    chip.appendChild(title);
+
+    if (ves !== F.focus) {
+      const flyBtn = document.createElement('button');
+      flyBtn.textContent = '🚀 Fly this ship';
+      flyBtn.onclick = () => {
+        F.setFocus(ves);
+        hideVesselChip();
+        if (S.audio) S.audio.ui();
+      };
+      chip.appendChild(flyBtn);
+    }
+
+    const tgtBtn = document.createElement('button');
+    tgtBtn.textContent = '🎯 Set as target';
+    tgtBtn.onclick = () => {
+      F.setTarget(ves);
+      hideVesselChip();
+      if (S.audio) S.audio.ui();
+    };
+    chip.appendChild(tgtBtn);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.className = 'vChipClose';
+    closeBtn.onclick = hideVesselChip;
+    chip.appendChild(closeBtn);
+
+    chip.classList.remove('hidden');
+  }
+
+  function hideVesselChip() {
+    const chip = document.getElementById('vesselChip');
+    if (chip) chip.classList.add('hidden');
   }
 
   /* ═══════════════════ menu ═══════════════════ */
@@ -447,6 +571,7 @@
       if (scene === 'build') B.pointerDown(e.clientX, e.clientY, e.button);
       else if (scene === 'flight' && R.cam.map) {
         mapDrag = { x: e.clientX, y: e.clientY, ox: R.cam.offX || 0, oy: R.cam.offY || 0 };
+        hideVesselChip();
       }
     });
 
@@ -481,12 +606,21 @@
         B.pointerUp();
         document.getElementById('palette').classList.remove('dropTarget');
       }
-      // a click (not a drag) on a world in map view plans a transfer to it
+      // a click (not a drag) in map view either opens the chip for a craft
+      // under the cursor (switch focus / set as rendezvous target), or —
+      // failing that — plans a transfer to whatever world is under it
       if (scene === 'flight' && mapDrag && e.button !== 2) {
         const moved = Math.hypot(e.clientX - mapDrag.x, e.clientY - mapDrag.y);
         if (moved < 5) {
-          const b = R.pickBody(e.clientX, e.clientY, cw, ch, F.t);
-          if (b) { F.setTarget(b); if (S.audio) S.audio.ui(); }
+          const ves = R.pickVessel(e.clientX, e.clientY, cw, ch, F.vessels);
+          if (ves) {
+            showVesselChip(ves, e.clientX, e.clientY);
+            if (S.audio) S.audio.ui();
+          } else {
+            hideVesselChip();
+            const b = R.pickBody(e.clientX, e.clientY, cw, ch, F.t);
+            if (b) { F.setTarget(b); if (S.audio) S.audio.ui(); }
+          }
         }
       }
       mapDrag = null;

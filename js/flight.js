@@ -22,6 +22,7 @@
   F.warpIdx = 0;
   F.running = false;
   F.over = null;
+  F.overMission = null;   // which mission the end-of-mission modal is about (see F.revert)
   F.bp = null;
   F.keys = Object.create(null);
   F.path = null;
@@ -92,7 +93,13 @@
     const v = S.vessel.fromBlueprint(bp);
     if (!v) return null;
 
-    const th = W.padTheta;
+    // if another craft is still sitting on the pad (e.g. launching a second
+    // rocket before the first has lifted off), nudge this one along the pad
+    // instead of spawning it stacked directly inside the other one
+    const pad = W.padPoint();
+    const parked = F.vessels.filter(x => !x.dead && Math.hypot(x.x - pad.x, x.y - pad.y) < 400).length;
+    const th = W.padTheta + (parked ? Math.ceil(parked / 2) * (parked % 2 ? 1 : -1) * 0.002 : 0);
+
     const g = W.terrain(W.earth, th);
     let lo = Infinity;
     for (const p of v.parts) lo = Math.min(lo, p.ly - p.def.h / 2);
@@ -129,11 +136,11 @@
     W.t = 0;
     F.warpIdx = 0;
     F.over = null;
+    F.overMission = null;
     smashCount = 0;
     pendingEnd = null;
     echoVessels = [];
     inAtmo = null;
-    F.reachedSpace = false;
     F.target = null;
     F.plan = null;
 
@@ -168,14 +175,20 @@
     return true;
   };
 
-  /** Per-mission revert: rebuild the currently-focused craft from its own
-      launch blueprint, leaving every other mission running untouched. */
+  /** Per-mission revert: rebuild a craft from its own launch blueprint,
+      leaving every other mission running untouched. Normally that's whatever
+      is currently focused — but when called from the end-of-mission modal
+      (F.overMission), the vessel that actually crashed is very likely no
+      longer F.focus by the time the modal appears (cleanup() reassigns focus
+      the instant the crash is detected, well before the delayed modal shows
+      up — see endMission/F.overMission), so that mission takes priority. */
   F.revert = function () {
-    const v = F.focus;
-    if (!v || !v.mission || !v.mission.bp) { hideEnd(); return; }
-    const idx = F.vessels.indexOf(v);
+    const mission = F.overMission || (F.focus && F.focus.mission);
+    F.overMission = null;
+    if (!mission || !mission.bp) { hideEnd(); return; }
+    const idx = F.vessels.findIndex(x => x.mission === mission);
     if (idx >= 0) F.vessels.splice(idx, 1);
-    const nv = spawnOnPad(v.mission.bp, v.mission);
+    const nv = spawnOnPad(mission.bp, mission);
     if (nv) {
       F.vessels.push(nv);
       F.setFocus(nv);
@@ -339,7 +352,10 @@
     if (pendingEnd) {
       pendingEnd.delay -= real;
       if (pendingEnd.delay <= 0) {
-        if (hudActive && !F.over) endMission(pendingEnd.title, pendingEnd.text);
+        if (hudActive && !F.over) {
+          F.overMission = pendingEnd.mission;
+          endMission(pendingEnd.title, pendingEnd.text);
+        }
         pendingEnd = null;
       }
     }
@@ -375,10 +391,11 @@
       if (F.target && F.isVesselTarget(F.target) && (F.target.dead || F.vessels.indexOf(F.target) < 0)) {
         F.toast('Target lost', 'bad');
         F.target = null; F.plan = null;
+        F.paintXfer();
       }
 
       hudTimer -= real;
-      if (hudTimer <= 0) { F.hud(); if (F.target) F.paintXfer(); else F.paintXfer(); hudTimer = 1 / 15; }
+      if (hudTimer <= 0) { F.hud(); if (F.target) F.paintXfer(); hudTimer = 1 / 15; }
 
       // planning is expensive, so only redo it when the orbit has actually
       // changed — i.e. shortly after a burn ends
@@ -413,7 +430,11 @@
         ves.dead = true;
         S.fx.explode(ves);
         if (ves === v && !pendingEnd && hudActive) {
-          pendingEnd = { title: 'Mission Failed', text: 'Your craft ' + ves.crash + '.', delay: 5 };
+          // ves is about to be spliced out and F.focus reassigned below, well
+          // before the delayed modal actually appears — carry its mission
+          // along explicitly so "Revert to Launch" reverts *this* craft, not
+          // whatever F.focus has drifted to by then
+          pendingEnd = { title: 'Mission Failed', text: 'Your craft ' + ves.crash + '.', delay: 5, mission: ves.mission };
         } else if (ves.mission) {
           // a background/non-focus mission was lost — say so, but don't pop
           // the (flight-scene-only) mission-failed modal over whatever screen
@@ -449,7 +470,10 @@
     if (!v || v.dead) return;
     const b = v.nearBody || W.earth;
 
-    if (v.altASL > 60000) { unlock('space'); F.reachedSpace = true; }
+    // per-vessel, not global — otherwise a fresh second rocket still sitting on
+    // the pad (already "landed") would count as "come home" the instant any
+    // *other* mission had ever reached space
+    if (v.altASL > 60000) { unlock('space'); v.reachedSpace = true; }
 
     // small notice on the way through the atmosphere's edge, in either direction
     if (b.atmo) {
@@ -474,7 +498,7 @@
 
     if (v.landed) {
       if (b === W.moon) unlock('moonLand');
-      if (b === W.earth && F.reachedSpace) {
+      if (b === W.earth && v.reachedSpace) {
         unlock('home');
         if (v.inWater) unlock('splash');
         // once per vessel — otherwise this fires every frame it sits landed
@@ -485,6 +509,7 @@
           // it can't leave the global F.over flag set and block whatever
           // *other* mission the player is flying/looking at right now
           if (hudActive && v === F.focus && !F.over) {
+            F.overMission = v.mission;
             endMission('Welcome Home', 'You landed back on Earth in one piece.');
           } else {
             F.toast((v.mission ? v.mission.name : 'A craft') + ' made it home safely.', 'gold');
@@ -608,18 +633,24 @@
     F.path = W.predict(v.x, v.y, v.vx, v.vy, F.t, { maxSteps: 2000 });
   };
 
-  /** lighter-weight, throttled path prediction for other in-flight missions
-      (not whatever's currently focused) — keeps a .path on each vessel so a
-      rendezvous target's trajectory is ready to draw without the cost of
-      running the full prediction on every craft, every frame */
-  let otherPredTimer = 0;
+  /** lighter-weight, throttled path prediction for every other vessel in the
+      world — other missions *and* junk (spent stages/debris) — so the map
+      can show their trajectories too. Only runs while the map is actually
+      open (nobody's looking at these paths otherwise), and only bothers with
+      craft close enough to the current view to matter; missions get a more
+      detailed path than junk since they're the more likely rendezvous target. */
   F.predictOthers = function (real) {
-    otherPredTimer -= real;
-    if (otherPredTimer > 0) return;
-    otherPredTimer = 0.5;
+    if (!R.cam.map) return;
     for (const ves of F.vessels) {
-      if (ves === F.focus || ves.dead || !ves.mission) continue;
-      ves.path = ves.landed ? null : W.predict(ves.x, ves.y, ves.vx, ves.vy, F.t, { maxSteps: 500 });
+      if (ves === F.focus || ves.dead) continue;
+      ves._predTimer = (ves._predTimer || 0) - real;
+      if (ves._predTimer > 0) continue;
+      // stagger by uid so not every vessel recomputes on the same tick
+      ves._predTimer = 0.3 + (ves.uid % 5) * 0.15;
+      if (ves.landed) { ves.path = null; continue; }
+      const d = Math.hypot(ves.x - R.cam.x, ves.y - R.cam.y);
+      if (d > R.viewR() * 1.5) { ves.path = null; continue; }   // well off-screen — skip
+      ves.path = W.predict(ves.x, ves.y, ves.vx, ves.vy, F.t, { maxSteps: ves.mission ? 1200 : 500 });
     }
   };
 
@@ -766,6 +797,14 @@
   F.endMission = endMission;
 
   function hideEnd() {
+    // F.revert() previously always ran through a full F.reset(), which
+    // happened to clear F.over/F.overMission as a side effect of wiping
+    // everything. Now that revert is per-mission, this is the one place both
+    // dismissal paths (Revert, and "Back to Hangar") funnel through, so it
+    // has to clear them explicitly — otherwise F.over stays stuck true and
+    // silently blocks input/staging on every craft from here on.
+    F.over = null;
+    F.overMission = null;
     const ov = document.getElementById('endOverlay');
     if (ov) ov.classList.add('hidden');
   }
@@ -773,5 +812,71 @@
 
   F.smashCount = () => smashCount;
   F.warpLabel = () => WARPS[F.warpIdx] + '×';
+
+  /* ═══════════════════ pause / resume (save games) ═══════════════════
+     Unlike sfs_lastBlueprint (the VAB design), this captures the whole
+     in-progress world — every mission's exact position/velocity/fuel/stage,
+     sim time and which craft has focus — so the player can close the tab
+     and pick every active flight back up unchanged. */
+
+  const SAVE_KEY = 'saveGame';
+
+  F.saveGame = function () {
+    if (!F.running || !F.vessels.length) { U.store.del(SAVE_KEY); return; }
+    U.store.set(SAVE_KEY, {
+      version: 1, savedAt: Date.now(),
+      simTime: F.t, warpIdx: F.warpIdx,
+      focusMissionId: (F.focus && F.focus.mission) ? F.focus.mission.id : null,
+      vessels: F.vessels.filter(v => !v.dead).map(S.vessel.toState),
+      camera: { map: R.cam.map, mapZoom: R.cam.mapZoom, offX: R.cam.offX, offY: R.cam.offY },
+      wrecked: [...W.wrecked]
+    });
+  };
+
+  /** Called once on boot. Returns true if a paused game was restored. */
+  F.loadGame = function () {
+    const st = U.store.get(SAVE_KEY, null);
+    if (!st || !st.vessels || !st.vessels.length) return false;
+
+    W.resetScenery();
+    for (const key of st.wrecked || []) W.wrecked.add(key);
+
+    F.vessels.length = 0;
+    let dropped = 0;
+    for (const vs of st.vessels) {
+      const v = S.vessel.fromState(vs);
+      if (v) F.vessels.push(v); else dropped++;
+      // keep the uid counter (shared with the VAB) past anything we just restored
+      for (const p of vs.parts) S.vessel.seedUid(p.uid);
+    }
+    if (!F.vessels.length) return false;
+
+    F.t = st.simTime || 0;
+    W.t = F.t;
+    F.warpIdx = U.clamp(st.warpIdx || 0, 0, 7);
+    F.focus = F.vessels.find(v => v.mission && v.mission.id === st.focusMissionId) || F.vessels[0];
+    F.running = true;
+    F.over = null;
+    pendingEnd = null;
+    echoVessels = [];
+    inAtmo = null;
+    // a resumed vessel may already be well past first-space; setting this
+    // conservatively true just means a landed craft can unlock "home" again
+    // (harmless — unlock() is idempotent) instead of silently never being able to
+    for (const rv of F.vessels) rv.reachedSpace = true;
+
+    if (st.camera) {
+      R.cam.map = !!st.camera.map;
+      R.cam.mapZoom = R.cam.mapZoomT = st.camera.mapZoom || R.cam.mapDefault;
+      R.cam.offX = st.camera.offX || 0;
+      R.cam.offY = st.camera.offY || 0;
+    }
+
+    F.refreshStages();
+    F.predict(true);
+    if (dropped) F.toast(dropped + ' craft could not be restored (parts changed).', 'bad');
+    F.toast('Welcome back — resumed ' + F.vessels.filter(v => v.mission).length + ' mission(s).');
+    return true;
+  };
 
 })(window.SFS);

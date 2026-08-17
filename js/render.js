@@ -48,6 +48,24 @@
     return best;
   };
 
+  /** which vessel is under this screen point in map view (null if none) —
+      checked ahead of R.pickBody by the caller, since craft are the more
+      specific, point-like click target */
+  R.pickVessel = function (sx, sy, cw, ch, vessels) {
+    if (!cam.map || !vessels) return null;
+    const z = cam.mapZoom;
+    const wx = cam.x + (sx - cw / 2) / z;
+    const wy = cam.y + (ch / 2 - sy) / z;
+    let best = null, bestD = Infinity;
+    for (const ves of vessels) {
+      if (ves.dead) continue;
+      const d = Math.hypot(wx - ves.x, wy - ves.y);
+      const reach = Math.max(ves.radius() * 3, 14 / z);
+      if (d < reach && d < bestD) { bestD = d; best = ves; }
+    }
+    return best;
+  };
+
   /** main.js hands us the canvas size so callers that don't already have it
       on hand (e.g. flight.js's off-screen checks) can still ask for it */
   R.setSize = function (w, h) { R._cw = w; R._ch = h; };
@@ -1052,17 +1070,63 @@
       ctx.stroke();
     }
 
-    // the world we're aiming at
-    if (G.targetBody) {
-      const bp = W.bodyPos(G.targetBody, t);
-      const rr = Math.max(G.targetBody.radius * 1.5, 16 / z);
+    // whatever we're aiming at — a world, or (for a rendezvous) a live vessel,
+    // duck-typed apart by the presence of .parts (only vessels have those)
+    if (G.target) {
+      const isVes = !!G.target.parts;
+      const tp = isVes ? { x: G.target.x, y: G.target.y } : W.bodyPos(G.target, t);
+      const rr = isVes ? Math.max(G.target.radius() * 3, 16 / z) : Math.max(G.target.radius * 1.5, 16 / z);
       ctx.beginPath();
-      ctx.arc(bp.x - cam.x, bp.y - cam.y, rr, 0, U.TAU);
+      ctx.arc(tp.x - cam.x, tp.y - cam.y, rr, 0, U.TAU);
       ctx.strokeStyle = 'rgba(255,190,90,.9)';
       ctx.lineWidth = 1.6 / z;
       ctx.setLineDash([5 / z, 5 / z]);
       ctx.stroke();
       ctx.setLineDash([]);
+    }
+
+    // every other vessel in the world — other missions and junk alike, each
+    // with whatever path F.predictOthers() last cached for it. Missions get a
+    // brighter path + a label; junk is dimmer and unlabeled to stay out of the way.
+    if (G.vessels) {
+      const focus = G.focus;
+      for (const ves of G.vessels) {
+        if (ves === focus || ves.dead) continue;
+        const isMission = !!ves.mission;
+        const pr = ves.path;
+        if (pr && pr.pts && pr.pts.length > 3) {
+          const rp = W.bodyPos(pr.ref, t);
+          ctx.beginPath();
+          for (let i = 0; i < pr.pts.length; i += 2) {
+            const x = pr.pts[i] + rp.x - cam.x, y = pr.pts[i + 1] + rp.y - cam.y;
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          }
+          ctx.strokeStyle = isMission ? 'rgba(120,180,255,.5)' : 'rgba(150,150,150,.26)';
+          ctx.lineWidth = (isMission ? 1.2 : 0.8) / z;
+          ctx.stroke();
+        }
+        const s = (isMission ? 5.5 : 4.5) / z;
+        ctx.save();
+        ctx.translate(ves.x - cam.x, ves.y - cam.y);
+        ctx.rotate(ves.angle);
+        ctx.beginPath();
+        ctx.moveTo(0, s * 1.5); ctx.lineTo(-s * 0.8, -s); ctx.lineTo(0, -s * 0.4); ctx.lineTo(s * 0.8, -s);
+        ctx.closePath();
+        ctx.fillStyle = isMission ? 'rgba(127,196,255,.95)' : 'rgba(138,143,154,.55)';
+        ctx.fill();
+        ctx.restore();
+        if (isMission && ves.mission.name) {
+          ctx.save();
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          const sx = (ves.x - cam.x) * z + cw / 2, sy = -(ves.y - cam.y) * z + ch / 2;
+          ctx.font = '11px system-ui, sans-serif';
+          ctx.fillStyle = 'rgba(180,210,255,.85)';
+          ctx.textAlign = 'center';
+          ctx.fillText(ves.mission.name, sx, sy - 10);
+          ctx.restore();
+          setWorldTf(ctx, cw, ch, dpr, z, 0);
+        }
+      }
     }
 
     // apoapsis / periapsis markers
