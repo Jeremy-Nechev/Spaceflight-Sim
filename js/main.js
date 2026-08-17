@@ -411,6 +411,8 @@
     };
     document.getElementById('mHelp').onclick = () => document.getElementById('help').classList.remove('hidden');
     document.getElementById('helpClose').onclick = () => document.getElementById('help').classList.add('hidden');
+    document.getElementById('mOrbitGuide').onclick = () => document.getElementById('orbitGuide').classList.remove('hidden');
+    document.getElementById('orbitGuideClose').onclick = () => document.getElementById('orbitGuide').classList.add('hidden');
   }
 
   function renderProgress() {
@@ -507,6 +509,8 @@
       if (k === 'escape') {
         const help = document.getElementById('help');
         if (!help.classList.contains('hidden')) { help.classList.add('hidden'); return; }
+        const guide = document.getElementById('orbitGuide');
+        if (!guide.classList.contains('hidden')) { guide.classList.add('hidden'); return; }
         setScene(scene === 'menu' ? (F.running ? 'flight' : 'build') : 'menu');
         return;
       }

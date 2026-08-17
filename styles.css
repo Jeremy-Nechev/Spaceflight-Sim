@@ -80,6 +80,17 @@ button:disabled{opacity:.4;cursor:default}
 }
 .keyGrid span{color:var(--dim)}
 
+.stepList{list-style:none;margin:0 0 20px;padding:0;counter-reset:step;display:flex;flex-direction:column;gap:12px}
+.stepList li{
+  counter-increment:step;position:relative;padding-left:38px;font-size:13.5px;line-height:1.5;color:var(--dim);
+}
+.stepList li b{color:var(--txt)}
+.stepList li::before{
+  content:counter(step);position:absolute;left:0;top:-1px;width:26px;height:26px;border-radius:50%;
+  background:linear-gradient(180deg,rgba(77,163,255,.28),rgba(77,163,255,.1));border:1px solid var(--edge-hot);
+  color:#cfe6ff;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;
+}
+
 /* ───────────── scenes & bars ───────────── */
 .scene{position:fixed;inset:0;pointer-events:none;z-index:10}
 .scene>*{pointer-events:auto}
