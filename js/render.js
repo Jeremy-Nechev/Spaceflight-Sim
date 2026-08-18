@@ -117,7 +117,7 @@
 
   // every wheel notch / pinch step is taken to this power, so a quarter of the
   // zoom happens per input — fine control beats racing to the limits
-  const ZOOM_STEP = 0.25;
+  const ZOOM_STEP = 0.5;
 
   R.zoomBy = function (f) {
     if (cam.map) {
