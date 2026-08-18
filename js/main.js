@@ -508,6 +508,7 @@
       F.setSas(e.currentTarget.dataset.sas || 'pro');
       F.paintXfer();
     };
+    document.getElementById('endStay').onclick = () => F.hideEnd();
     document.getElementById('endRevert').onclick = () => F.revert();
     document.getElementById('endBuild').onclick = () => { F.hideEnd(); setScene('build'); };
     document.getElementById('endMenu').onclick = () => { F.hideEnd(); setScene('menu'); };
@@ -547,11 +548,9 @@
     document.getElementById('mapBtn').classList.toggle('on', R.cam.map);
     if (R.cam.map) {
       R.cam.offX = 0; R.cam.offY = 0;
-      const v = F.focus;
-      const r = v ? Math.max(4e5, Math.hypot(v.x, v.y) * 1.6) : 1e6;
-      const scr = Math.max(320, Math.min(cw, ch));   // never 0 before first resize
-      R.cam.mapZoomT = R.cam.mapZoom =
-        U.clamp(0.42 * scr / r, R.cam.mapMin, R.cam.mapMax);
+      // First look: frame the world the craft is at. After that the player's
+      // own zoom is what they get back every time they reopen the map.
+      if (!R.cam.mapSet) R.frameOn(F.focus, F.t, cw, ch);
     } else {
       hideVesselChip();
     }
@@ -690,7 +689,10 @@
       if (scene === 'build') B.pointerDown(e.clientX, e.clientY, e.button);
       else if (scene === 'flight') {
         clickAt = { x: e.clientX, y: e.clientY };
-        if (R.cam.map) mapDrag = { x: e.clientX, y: e.clientY, ox: R.cam.offX || 0, oy: R.cam.offY || 0 };
+        if (R.cam.map) {
+          R.dropAnchor();
+          mapDrag = { x: e.clientX, y: e.clientY, ox: R.cam.offX || 0, oy: R.cam.offY || 0 };
+        }
         hideVesselChip();
       }
     });
@@ -702,7 +704,11 @@
         if (pinchD > 0 && d > 0) {
           const f = d / pinchD;
           if (scene === 'build') B.wheel(f > 1 ? -1 : 1);
-          else R.zoomBy(f);
+          else {
+            // pinch zooms about the midpoint between the fingers
+            const m = pinchMid();
+            R.zoomAt(f, m.x, m.y, cw, ch);
+          }
         }
         pinchD = d;
         return;
@@ -716,6 +722,7 @@
         const z = R.cam.mapZoom;
         R.cam.offX = mapDrag.ox - (e.clientX - mapDrag.x) / z;
         R.cam.offY = mapDrag.oy + (e.clientY - mapDrag.y) / z;
+        R.cam.mapSet = true;
       }
     });
 
@@ -759,7 +766,7 @@
     canvas.addEventListener('wheel', e => {
       e.preventDefault();
       if (scene === 'build') B.wheel(e.deltaY);
-      else R.zoomBy(e.deltaY < 0 ? 1.16 : 1 / 1.16);
+      else R.zoomAt(e.deltaY < 0 ? 1.16 : 1 / 1.16, e.clientX, e.clientY, cw, ch);
     }, { passive: false });
 
     window.addEventListener('keydown', e => {
@@ -810,6 +817,13 @@
   function pinchDist() {
     const it = Array.from(pointers.values());
     return it.length < 2 ? 0 : Math.hypot(it[0].x - it[1].x, it[0].y - it[1].y);
+  }
+
+  /** the point a two-finger pinch should zoom about */
+  function pinchMid() {
+    const it = Array.from(pointers.values());
+    if (it.length < 2) return { x: cw / 2, y: ch / 2 };
+    return { x: (it[0].x + it[1].x) / 2, y: (it[0].y + it[1].y) / 2 };
   }
 
   /* ═══════════════════ go ═══════════════════ */

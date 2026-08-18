@@ -181,6 +181,7 @@
   /** Wipes the whole sim and starts a brand-new game with one vessel. */
   F.reset = function () {
     W.resetScenery();
+    R.cam.mapSet = false;          // a fresh game gets the map framed for it again
     S.fx.clear();
     F.vessels.length = 0;
     F.t = 0;
@@ -811,7 +812,7 @@
           // *other* mission the player is flying/looking at right now
           if (hudActive && v === F.focus && !F.over) {
             F.overMission = v.mission;
-            endMission('Welcome Home', 'You landed back on Earth in one piece.');
+            endMission('Welcome Home', 'You landed back on Earth in one piece.', true);
           } else {
             F.toast((v.mission ? v.mission.name : 'A craft') + ' made it home safely.', 'gold');
           }
@@ -1429,13 +1430,24 @@
 
   /* ═══════════════════ mission end ═══════════════════ */
 
-  function endMission(title, text) {
+  /**
+   * The end-of-mission panel. `canStay` is for the endings the craft survives
+   * — landing back home doesn't have to be the end of anything, so the panel
+   * offers to get out of the way and let the player carry on flying it.
+   */
+  function endMission(title, text, canStay) {
     if (F.over) return;
     F.over = title;
     const ov = document.getElementById('endOverlay');
     if (!ov) return;
     document.getElementById('endTitle').textContent = title;
     document.getElementById('endText').textContent = text;
+    const stay = document.getElementById('endStay');
+    const rev = document.getElementById('endRevert');
+    if (stay) stay.classList.toggle('hidden', !canStay);
+    // carrying on is the obvious thing to do after a safe landing; after a
+    // crash there is nothing to carry on with, so reverting leads again
+    if (rev) rev.classList.toggle('primary', !canStay);
     ov.classList.remove('hidden');
   }
   F.endMission = endMission;

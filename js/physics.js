@@ -115,16 +115,26 @@
    * ground rides the ground, and one still in the air coasts ballistically.
    */
   const coastWreck = PH.driftWreck = function (v, dt, t) {
+    // A wreck is not flown any more — the camera parks on it for five seconds
+    // while the fireball burns. So all it has to do is stay where the craft
+    // died *relative to the world*, which was free back when the world stood
+    // still and now means travelling along with it. Coasting on its last
+    // velocity instead dragged the view off at whatever speed the craft was
+    // doing when it died, which at re-entry speeds is a couple of kilometres a
+    // second of ground rushing past.
     const b = v.nearBody || W.soiBody(v.x, v.y, t);
-    if (v.landed || v.touching) {
-      const bv = W.bodyVel(b, t);
-      v.x += bv.x * dt; v.y += bv.y * dt;
-      v.vx = bv.x; v.vy = bv.y;
-      return;
+    const bv = W.bodyVel(b, t);
+    v.x += bv.x * dt; v.y += bv.y * dt;
+    v.vx = bv.x; v.vy = bv.y;
+    // and never underground: a fast impact overshoots the surface before the
+    // step that kills it has finished
+    const gi = W.groundInfo(b, v.x, v.y, t);
+    if (gi.alt < 0 && gi.r > 1) {
+      const bp = W.bodyPos(b, t);
+      const k = (gi.ground + 1) / gi.r;
+      v.x = bp.x + gi.dx * k;
+      v.y = bp.y + gi.dy * k;
     }
-    W.gravity(v.x, v.y, t, _g);
-    v.vx += _g.x * dt; v.vy += _g.y * dt;
-    v.x += v.vx * dt; v.y += v.vy * dt;
   };
 
   /* ═══════════════════ hull-to-hull collision ═══════════════════ */
@@ -511,7 +521,17 @@
     }
     v.heatFrac = worst;
     v.heatGlow = hottest;
-    if (flux > 0 && hottest > 0.08 && S.fx) S.fx.reentry(v, U.clamp(hottest / 0.6, 0, 1), dt);
+    // Embers stream off the hull because air is tearing past it, so the trail
+    // belongs to the airflow — and only when the air is what is doing the
+    // cooking. Steering it by the dominant heat source instead put the trail
+    // on the sunward face of a craft that was merely coasting in sunlight,
+    // which read as smoke pouring off the top of the rocket.
+    // (a third of the solar flux is enough to count as "the air is doing this"
+    // — it keeps the trail appearing as high up as it always did, while a
+    // craft merely sunbathing in thin air gets none)
+    if (flux > sunFlux * 0.35 && hottest > 0.08 && S.fx) {
+      S.fx.reentry(v, U.clamp(hottest / 0.6, 0, 1), dt, avx, avy);
+    }
     if (cooked) for (const p of cooked) burnOff(v, p);
   }
 

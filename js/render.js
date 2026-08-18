@@ -65,8 +65,17 @@
     // the map has to be able to hold the whole system in view now, so it zooms
     // out roughly an order of magnitude further than the Earth–Moon days needed
     mapMin: 5e-7, mapMax: 0.02,
-    mapDefault: 6.5e-5
+    mapDefault: 6.5e-5,
+    // set once the player has zoomed or panned the map themselves: from then
+    // on the map reopens exactly where they left it, rather than being
+    // re-framed for them every time
+    mapSet: false
   };
+
+  // The point the map is being zoomed about, in world coordinates, held while
+  // the zoom eases toward its target so the spot under the cursor stays put
+  // for the whole animation rather than just the first frame of it.
+  let zAnchor = null;
 
   /** which world is under this screen point in map view (null if none) */
   R.pickBody = function (sx, sy, cw, ch, t) {
@@ -153,8 +162,41 @@
   // zoom happens per input — fine control beats racing to the limits
   const ZOOM_STEP = 0.5;
 
+  /**
+   * Zoom about a screen point — the map is pannable, so a wheel over the far
+   * side of a planet should pull *that* toward you, not the craft.
+   * `sx`/`sy` optional; without them this is R.zoomBy.
+   */
+  R.zoomAt = function (f, sx, sy, cw, ch) {
+    if (cam.map && sx != null) {
+      const w = R.screenToWorld(sx, sy, cw, ch);
+      zAnchor = { sx: sx, sy: sy, cw: cw, ch: ch, x: w.x, y: w.y };
+    }
+    R.zoomBy(f);
+  };
+
+  /** drop the zoom anchor — panning takes over from here */
+  R.dropAnchor = function () { zAnchor = null; };
+
+  /**
+   * Frame the map on whatever world the craft is at: its own planet or moon
+   * and the orbit around it, not the whole solar system. (The distance from
+   * the *origin* used to stand in for this, which was the same thing back when
+   * Earth sat at the origin and is now the width of Earth's orbit.)
+   */
+  R.frameOn = function (v, t, cw, ch) {
+    const b = (v && (v.nearBody || W.soiBody(v.x, v.y, t))) || W.earth;
+    const bp = W.bodyPos(b, t);
+    const d = v ? Math.hypot(v.x - bp.x, v.y - bp.y) : b.radius * 3;
+    const r = Math.max(b.radius * 2.4, d * 1.8);
+    const scr = Math.max(320, Math.min(cw || R._cw || 800, ch || R._ch || 450));
+    cam.mapZoomT = cam.mapZoom = U.clamp((0.42 * scr) / r, cam.mapMin, cam.mapMax);
+    zAnchor = null;
+  };
+
   R.zoomBy = function (f) {
     if (cam.map) {
+      cam.mapSet = true;
       // the map spans planet-to-planet distances, so the same wheel/pinch
       // step that feels right up close made the map lurch — soften it here
       // rather than in every caller
@@ -180,6 +222,14 @@
       if (!isFinite(cam.mapZoomT) || cam.mapZoomT <= 0) cam.mapZoomT = cam.mapDefault;
       if (!isFinite(cam.mapZoom) || cam.mapZoom <= 0) cam.mapZoom = cam.mapZoomT;
       cam.mapZoom = U.smooth(cam.mapZoom, cam.mapZoomT, 9, dt);
+      // hold the zoomed-about point under the cursor as the zoom eases in
+      if (zAnchor) {
+        const now = R.screenToWorld(zAnchor.sx, zAnchor.sy, zAnchor.cw, zAnchor.ch);
+        const ddx = zAnchor.x - now.x, ddy = zAnchor.y - now.y;
+        cam.offX += ddx; cam.offY += ddy;
+        cam.x += ddx; cam.y += ddy;
+        if (Math.abs(cam.mapZoom - cam.mapZoomT) < cam.mapZoomT * 0.002) zAnchor = null;
+      }
       return;
     }
     const b = v.nearBody || W.soiBody(v.x, v.y, t);
@@ -1349,14 +1399,17 @@
    * source. Spraying them from the middle of the hull instead used to put the
    * fire down one side of the rocket regardless of which end was into the flow.
    */
-  FX.reentry = function (v, k, dt) {
+  FX.reentry = function (v, k, dt, dx, dy) {
     const want = dt * 46 * k;
     let n = Math.floor(want);
     if (Math.random() < want - n) n++;
     if (!n) return;
-    const d = v.heatDir;
+    // the direction the heat arrives from: the airflow, as passed in by the
+    // caller, or failing that whatever last cooked the hull
     let ux, uy;
-    if (d) { ux = d.x; uy = d.y; }
+    const dl = dx == null ? 0 : Math.hypot(dx, dy);
+    if (dl > 1e-6) { ux = dx / dl; uy = dy / dl; }
+    else if (v.heatDir) { ux = v.heatDir.x; uy = v.heatDir.y; }
     else {
       const sp = Math.hypot(v.vx, v.vy) || 1;
       ux = v.vx / sp; uy = v.vy / sp;
