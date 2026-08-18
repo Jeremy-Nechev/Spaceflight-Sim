@@ -55,9 +55,9 @@
     { id: 'home', label: 'Return home safely' },
     { id: 'demolition', label: 'Flatten 25 buildings' },
     { id: 'interplanetary', label: 'Escape into solar orbit' },
-    { id: 'aresSoi', label: 'Reach Ares' },
-    { id: 'aresOrbit', label: 'Orbit Ares' },
-    { id: 'aresLand', label: 'Land on Ares' },
+    { id: 'marsSoi', label: 'Reach Mars' },
+    { id: 'marsOrbit', label: 'Orbit Mars' },
+    { id: 'marsLand', label: 'Land on Mars' },
     { id: 'koreLand', label: 'Land on Kore' },
     { id: 'sunDive', label: 'Skim the Sun and survive' }
   ];
@@ -408,7 +408,7 @@
     const v = F.focus;
     if (!v) return 0;
     // clear of the air of whatever world we're over — measured against that
-    // world's own atmosphere, since Ares' is thin and the Moon has none
+    // world's own atmosphere, since Mars' is thin and the Moon has none
     const near = v.nearBody || W.earth;
     const clear = near.atmo ? near.atmo.height + 2000 : 5000;
     const onRailsOk = v.altASL > clear && !v.landed && !v.touching && (v.liveThrust || 0) <= 0;
@@ -711,7 +711,7 @@
 
     const soi = W.soiBody(v.x, v.y, F.t);
     if (soi === W.moon) unlock('moonSoi');
-    if (soi === W.ares) unlock('aresSoi');
+    if (soi === W.mars) unlock('marsSoi');
     if (soi === W.sun && v.reachedSpace) unlock('interplanetary');
 
     // Close enough to the Sun to be in real trouble. Set at the range where an
@@ -724,12 +724,12 @@
     if (el && el.e < 1) {
       if (el.body === W.earth && el.pe > W.earth.radius + 60000) unlock('orbit');
       if (el.body === W.moon && el.pe > W.moon.radius + 3000 && !v.landed) unlock('moonOrbit');
-      if (el.body === W.ares && el.pe > W.ares.radius + 28000 && !v.landed) unlock('aresOrbit');
+      if (el.body === W.mars && el.pe > W.mars.radius + 28000 && !v.landed) unlock('marsOrbit');
     }
 
     if (v.landed) {
       if (b === W.moon) unlock('moonLand');
-      if (b === W.ares) unlock('aresLand');
+      if (b === W.mars) unlock('marsLand');
       if (b === W.byId.kore) unlock('koreLand');
       if (b === W.earth && v.reachedSpace) {
         unlock('home');

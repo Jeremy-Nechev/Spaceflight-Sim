@@ -228,7 +228,7 @@
     const ref = W.soiBody(v.x, v.y, t);         // whose gravity we are orbiting
     const gi = W.groundInfo(near, v.x, v.y, t);      // used by the ground-contact
     // section below too — nothing moves between here and there, so one query does
-    // air belongs to whichever world we are over, not to Earth — Ares has its
+    // air belongs to whichever world we are over, not to Earth — Mars has its
     // own (very thin) sky, and the Moon and Kore have none at all
     const altASL = W.altitudeASL(near, v.x, v.y, t);
     const rho = W.density(near, altASL);

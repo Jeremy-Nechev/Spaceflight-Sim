@@ -12,9 +12,9 @@
   const W = S.world = {};
 
   /* ═══════════════════ bodies ═══════════════════
-     A small solar system: the Sun at the origin, Earth and Ares going round
+     A small solar system: the Sun at the origin, Earth and Mars going round
      it, and a moon apiece. Distances and masses are picked so the trips are
-     recognisable but playable — a year lasts a week and a half, an Earth→Ares
+     recognisable but playable — a year lasts a week and a half, an Earth→Mars
      window comes round every 24 days, and the crossing takes eight. */
 
   const SUN = {
@@ -86,8 +86,8 @@
 
   /** the second planet: smaller, colder, rust-red, and with an atmosphere so
       thin it will slow you a little but never land you */
-  const ARES = {
-    id: 'ares', name: 'Ares', seed: 4711,
+  const MARS = {
+    id: 'mars', name: 'Mars', seed: 4711,
     radius: 170000,
     mu: 1.07e11,                       // ≈3.7 m/s² at the surface
     sea: false,
@@ -103,12 +103,12 @@
       water: '#000', waterDeep: '#000', surf: '#000',
       sky: '#d99a62', skyHi: '#8a4a28', glow: '#f0c090'
     },
-    scenery: { density: 0.7, chunkM: 300, slots: 4, kinds: 'ares' },
+    scenery: { density: 0.7, chunkM: 300, slots: 4, kinds: 'mars' },
     clouds: null,
     orbit: { parent: 'sun', a: 4.90e8, phase0: 2.4 }
   };
 
-  /** Ares' little captured rock — barely any gravity, easy to land on */
+  /** Mars' little captured rock — barely any gravity, easy to land on */
   const KORE = {
     id: 'kore', name: 'Kore', seed: 24601,
     radius: 40000,
@@ -128,15 +128,15 @@
     scenery: { density: 0.55, chunkM: 260, slots: 3, kinds: 'moon' },
     clouds: null,
     craters: true,
-    orbit: { parent: 'ares', a: 1.20e6, phase0: 1.9 }
+    orbit: { parent: 'mars', a: 1.20e6, phase0: 1.9 }
   };
 
-  W.bodies = [SUN, EARTH, MOON, ARES, KORE];
+  W.bodies = [SUN, EARTH, MOON, MARS, KORE];
   W.sun = SUN;
   W.earth = EARTH;
   W.moon = MOON;
-  W.ares = ARES;
-  W.byId = { sun: SUN, earth: EARTH, moon: MOON, ares: ARES, kore: KORE };
+  W.mars = MARS;
+  W.byId = { sun: SUN, earth: EARTH, moon: MOON, mars: MARS, kore: KORE };
   W.t = 0;
 
   W.bodies.forEach(b => {
@@ -158,7 +158,7 @@
   const SOI_ORDER = W.bodies.filter(b => b.soi).sort((a, b) => a.soi - b.soi);
 
   /** how far out the system goes — used to call a trajectory "escaped" */
-  W.systemR = ARES.orbit.a * 2.6;
+  W.systemR = MARS.orbit.a * 2.6;
 
   /** scenery the player has already flattened */
   W.wrecked = new Set();
@@ -321,7 +321,7 @@
   };
 
   /** which body's sphere of influence a point sits in — innermost claim wins,
-      so a craft near Kore answers Kore rather than Ares or the Sun */
+      so a craft near Kore answers Kore rather than Mars or the Sun */
   W.soiBody = function (x, y, t) {
     for (let i = 0; i < SOI_ORDER.length; i++) {
       const b = SOI_ORDER[i];
@@ -1079,7 +1079,7 @@
       { t: 'flag', wgt: 5, w: [2, 3], h: [5, 7] }
     ],
     // a wind-scoured desert: scattered stones and the odd big weathered block
-    ares: [
+    mars: [
       { t: 'rock', wgt: 58, w: [4, 11], h: [2, 7] },
       { t: 'boulder', wgt: 38, w: [12, 24], h: [8, 17] },
       { t: 'flag', wgt: 4, w: [2, 3], h: [5, 7] }

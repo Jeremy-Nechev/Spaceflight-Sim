@@ -1424,7 +1424,7 @@
 
     const t = G.t;
     const v = G.focus;
-    // the sky belongs to whatever world we are over — Earth's blue, Ares'
+    // the sky belongs to whatever world we are over — Earth's blue, Mars'
     // thin rust-coloured haze, or nothing at all above an airless rock
     const skyBody = (v && v.nearBody) || W.earth;
     const atmoF = v ? W.atmoFrac(skyBody, v.altASL == null ? 1e9 : v.altASL) : 0;
