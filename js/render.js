@@ -1701,8 +1701,8 @@
       ctx.lineWidth = 1.6 / z;
       ctx.stroke();
       if (pr.hit) {
-        const hp = W.bodyPos(pr.hit.body, t);
-        markX(ctx, pr.hit.x + hp.x - cam.x, pr.hit.y + hp.y - cam.y, 7 / z, '#ff6b60');
+        // the impact point is stored in the path's own frame (see W.predict)
+        markX(ctx, pr.hit.x + rp.x - cam.x, pr.hit.y + rp.y - cam.y, 7 / z, '#ff6b60');
       }
     }
 

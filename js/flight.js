@@ -591,7 +591,14 @@
     }
 
     predTimer -= real;
-    if (predTimer <= 0) { F.predict(); predTimer = 0.3; }
+    if (predTimer <= 0) {
+      F.predict();
+      // Refresh as often as the path is cheap to work out. A conic (which is
+      // most of them now) costs a fifth of a millisecond, so it can be redrawn
+      // twelve times a second and follow a burn as it happens; a genuine
+      // multi-body encounter costs more and settles for a slower cadence.
+      predTimer = U.clamp(predMs * 0.4, 0.08, 0.35);   // ms of work ⇒ seconds of wait
+    }
     F.predictOthers(real);
 
     if (hudActive) {
@@ -1191,19 +1198,28 @@
 
   /* ═══════════════════ prediction ═══════════════════ */
 
+  let predMs = 0.4;
+
   F.predict = function () {
     const v = F.focus;
     if (!v || v.dead) { F.path = null; F.el = null; return; }
     const soi = W.soiBody(v.x, v.y, F.t);
     F.el = W.elements(soi, v.x, v.y, v.vx, v.vy, F.t);
     if (v.landed) { F.path = null; return; }
+    // Nothing reads the path unless the map is open or a target is set (the
+    // panel's live "closest approach" comes off it), and the HUD's apoapsis
+    // and periapsis are analytic above — so don't work one out for nobody.
+    const watch = watchOf();
+    if (!R.cam.map && !watch) { F.path = null; return; }
     // on an escape path there is no lap to close, so look further ahead with a
     // longer stride — that's what lets the panel report a closest pass at a
     // planet days away instead of trailing off in empty space
     const esc = F.el && F.el.e >= 1;
+    const t0 = performance.now();
     F.path = W.predict(v.x, v.y, v.vx, v.vy, F.t, {
-      maxSteps: esc ? 3000 : 2000, dtCap: esc ? 5400 : 1200, watch: watchOf()
+      maxSteps: esc ? 3000 : 2000, dtCap: esc ? 5400 : 1200, watch: watch
     });
+    predMs = predMs * 0.6 + (performance.now() - t0) * 0.4;
   };
 
   /** lighter-weight, throttled path prediction for every other vessel in the

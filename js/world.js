@@ -641,16 +641,146 @@
   /* ═══════════════════ trajectory prediction ═══════════════════ */
 
   /**
-   * Integrate a point mass forward under Earth + Moon gravity.
-   * Returns points relative to the reference body's *current* position so the
-   * path can be drawn straight onto the map.
+   * Which body a path should be drawn *about*: the innermost sphere of
+   * influence the craft is actually bound to.
+   *
+   * This matters because a path is stored in its reference body's co-moving
+   * frame — each point relative to where that body was at that instant — and
+   * then drawn anchored on where the body is *now*. That is exactly right for
+   * an orbit (the ellipse sits still around the planet while the planet sails
+   * along its own orbit) and badly wrong for a path that merely passes
+   * through: a craft crossing the Moon's sphere of influence on its way
+   * somewhere else used to be re-referenced to the Moon, which swung the far
+   * end of its path thousands of kilometres sideways — and swung it back a
+   * few minutes later when the reference flipped again. Same for a craft
+   * leaving for Mars: bound to the Sun, but drawn about Earth.
+   */
+  function frameBody(x, y, vx, vy, t) {
+    let b = W.soiBody(x, y, t);
+    while (b.parent) {
+      const el = W.elements(b, x, y, vx, vy, t);
+      if (el.e < 1 && isFinite(el.a) && el.a > 0) break;   // bound here — this is the frame
+      b = b.parent;
+    }
+    return b;
+  }
+  W.frameBody = frameBody;
+
+  /**
+   * The whole conic, sampled analytically. Where one body really is the only
+   * thing pulling, this is both exact — no integrator drift to make a
+   * periapsis wander between refreshes — and roughly ten times cheaper than
+   * stepping round the orbit. Returns null when the geometry is out of scope
+   * (hyperbolic, or reaching far enough out that the neighbours matter), and
+   * the caller falls back to integrating.
+   */
+  function conicPath(ref, el, x, y, vx, vy, t0, opts) {
+    if (!(el.e < 0.985) || !isFinite(el.period) || el.a <= 0) return null;
+    // far enough out and the frame body stops being the only thing that
+    // matters (solar tides on a high orbit, Earth's pull on a lunar one)
+    if (ref.soi && el.ap > ref.soi * 0.4) return null;
+
+    const mu = ref.mu, e = el.e, a = el.a;
+    const n = Math.sqrt(mu / (a * a * a));
+    const sgn = el.h < 0 ? -1 : 1;
+    const w = Math.atan2(el.ey, el.ex);              // direction of periapsis
+    const bp0 = W.bodyPos(ref, t0);
+    const nu0 = sgn * U.wrap(Math.atan2(y - bp0.y, x - bp0.x) - w);
+    const hf = Math.sqrt((1 - e) / (1 + e));
+    const E0 = 2 * Math.atan(hf * Math.tan(nu0 / 2));
+    const M0 = E0 - e * Math.sin(E0);
+
+    const N = 300;
+    const watch = opts.watch || null;
+    const closest = watch ? { d: Infinity, t: t0 } : null;
+    const pts = [];
+    // time is *not* linear in sample index (points are evenly spaced in
+    // eccentric anomaly, which bunches them at periapsis), so each one has to
+    // carry its own clock for the encounter screen below to mean anything
+    const times = [];
+    let hit = null, span = 0;
+
+    // radius and in-frame position at eccentric anomaly E
+    const at = (E) => {
+      const r = a * (1 - e * Math.cos(E));
+      const nu = 2 * Math.atan2(Math.sqrt(1 + e) * Math.sin(E / 2),
+        Math.sqrt(1 - e) * Math.cos(E / 2));
+      const th = w + sgn * nu;
+      return { r, th, x: r * Math.cos(th), y: r * Math.sin(th),
+        t: t0 + (E - e * Math.sin(E) - M0) / n };
+    };
+
+    let prev = null;
+    for (let i = 0; i <= N; i++) {
+      const E = E0 + (U.TAU * i) / N;
+      const p = at(E);
+      // the ground gets in the way — stop there, and pin down where within a
+      // few hundred metres rather than to the nearest sample
+      const gr = terrain(ref, p.th);
+      if (p.r < gr) {
+        if (prev) {
+          let lo = prev.E, hi = E;
+          for (let k = 0; k < 18; k++) {
+            const mid = (lo + hi) / 2;
+            const q = at(mid);
+            if (q.r < terrain(ref, q.th)) hi = mid; else lo = mid;
+          }
+          const q = at(hi);
+          pts.push(q.x, q.y);
+          span = q.t - t0;
+          hit = { body: ref, t: span, x: q.x, y: q.y };
+        } else {
+          hit = { body: ref, t: 0, x: p.x, y: p.y };
+          span = 0;
+        }
+        break;
+      }
+      pts.push(p.x, p.y);
+      times.push(p.t);
+      span = p.t - t0;
+      if (watch) {
+        const wp = watch.posAt(p.t);
+        const rp = W.bodyPos(ref, p.t);
+        const wd = Math.hypot(p.x + rp.x - wp.x, p.y + rp.y - wp.y);
+        if (wd < closest.d) { closest.d = wd; closest.t = p.t; }
+      }
+      prev = { E, r: p.r };
+    }
+
+    // Anything else close enough to bend this path? If so it is not a
+    // one-body problem after all, and the integrator should have it.
+    for (let k = 0; k < W.bodies.length; k++) {
+      const b = W.bodies[k];
+      if (b === ref || !b.soi) continue;
+      for (let i = 0; i < times.length; i++) {
+        const tt = times[i];
+        const rp = W.bodyPos(ref, tt), bp = W.bodyPos(b, tt);
+        const dx = pts[i * 2] + rp.x - bp.x, dy = pts[i * 2 + 1] + rp.y - bp.y;
+        if (dx * dx + dy * dy < b.soi * b.soi * 4) return null;   // within 2 spheres: integrate
+      }
+    }
+
+    return { pts, ref, refNow: bp0, hit, closed: !hit, escape: false, span, closest, conic: true };
+  }
+
+  /**
+   * Where a craft is going, as a polyline for the map.
+   *
+   * Points come back in the frame of the body the path is bound to (see
+   * frameBody), each relative to that body's position at its own instant, so
+   * the renderer can anchor the whole shape on the body's current position.
    */
   W.predict = function (x, y, vx, vy, t0, opts) {
     opts = opts || {};
     const maxSteps = opts.maxSteps || 2400;
     const dtCap = opts.dtCap || 1200;
-    const ref = W.soiBody(x, y, t0);
+    const ref = frameBody(x, y, vx, vy, t0);
     const refNow = W.bodyPos(ref, t0);
+    {
+      const elRef = W.elements(ref, x, y, vx, vy, t0);
+      const c = conicPath(ref, elRef, x, y, vx, vy, t0, opts);
+      if (c) return c;
+    }
     const pts = [];
     const g = { x: 0, y: 0 };
     let t = t0, hit = null, escape = false;
@@ -672,11 +802,27 @@
     let ax = g.x, ay = g.y;
 
     for (let i = 0; i < maxSteps; i++) {
-      const b = W.soiBody(x, y, t);
-      const bp = W.bodyPos(b, t);
-      const rr = Math.hypot(x - bp.x, y - bp.y);
-      const Tc = U.TAU * Math.sqrt((rr * rr * rr) / b.mu);
-      const dt = U.clamp(Tc / 240, 0.4, dtCap);
+      // Step size from the nearest thing in the sky, not merely from whichever
+      // sphere of influence we happen to be sitting in. Sizing it off Earth's
+      // distance means striding a hundred kilometres at a time through a lunar
+      // flyby — and the Moon's sphere of influence is only 800 km across, so
+      // the encounter that decides the whole rest of the path was resolved by
+      // two or three samples, or stepped clean over. Both tests below tighten
+      // as anything gets closer: a fraction of the local orbital timescale,
+      // and a fraction of the way in to the body itself.
+      let dt = dtCap;
+      for (let k = 0; k < W.bodies.length; k++) {
+        const cb = W.bodies[k];
+        const cp = W.bodyPos(cb, t);
+        const rr = Math.max(cb.radius * 0.5, Math.hypot(x - cp.x, y - cp.y));
+        const Tc = U.TAU * Math.sqrt((rr * rr * rr) / cb.mu);
+        if (Tc / 240 < dt) dt = Tc / 240;
+        const cv = W.bodyVel(cb, t);
+        const rs = Math.hypot(vx - cv.x, vy - cv.y) || 1;
+        const geo = (0.06 * rr) / rs;
+        if (geo < dt) dt = geo;
+      }
+      if (dt < 0.4) dt = 0.4;
 
       // velocity Verlet
       const nx = x + vx * dt + 0.5 * ax * dt * dt;
@@ -704,7 +850,10 @@
         const cdx = x - cp.x, cdy = y - cp.y;
         const cr = Math.hypot(cdx, cdy);
         if (cr < cb.radius + 4000 && cr < terrain(cb, Math.atan2(cdy, cdx))) {
-          hit = { body: cb, t: t - t0, x: cdx, y: cdy };
+          // in the path's own frame, so the marker sits on the end of the line
+          // rather than wherever the body it hit happens to be right now
+          const hp = W.bodyPos(ref, t);
+          hit = { body: cb, t: t - t0, x: x - hp.x, y: y - hp.y };
           break;
         }
       }
