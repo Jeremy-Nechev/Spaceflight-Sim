@@ -230,6 +230,40 @@
     ctx.beginPath(); ctx.rect(-w / 2, -h / 2, w, h); ink(ctx, w);
   }
 
+  /**
+   * An interstage shroud, drawn in the craft's own coordinates about the
+   * shroud's centre (see V.shroudsFor). Straight-sided where it butts up
+   * against the stage above; closed over with a cone where there is nothing
+   * above it to butt against.
+   */
+  S.drawShroud = function (ctx, sh) {
+    const w = sh.w, h = sh.h;
+    const cone = sh.nose ? Math.min(w * 0.62, h * 0.5) : 0;
+    const body = h - cone;
+    ctx.beginPath();
+    ctx.moveTo(-w / 2, -h / 2);
+    ctx.lineTo(-w / 2, -h / 2 + body);
+    if (cone > 0) {
+      ctx.quadraticCurveTo(-w * 0.44, h / 2 - cone * 0.1, 0, h / 2);
+      ctx.quadraticCurveTo(w * 0.44, h / 2 - cone * 0.1, w / 2, -h / 2 + body);
+    } else {
+      ctx.lineTo(w / 2, -h / 2 + body);
+    }
+    ctx.lineTo(w / 2, -h / 2);
+    ctx.closePath();
+    ctx.fillStyle = cyl(ctx, w, SHELL_L, SHELL_M, SHELL_D);
+    ctx.fill();
+    ink(ctx, w);
+    // the split line the two halves come apart along, and a shoulder band
+    ctx.strokeStyle = 'rgba(70,80,96,.5)';
+    ctx.lineWidth = Math.max(0.03, w * 0.016);
+    ctx.beginPath();
+    ctx.moveTo(0, -h / 2 + 0.05); ctx.lineTo(0, h / 2 - 0.05);
+    ctx.stroke();
+    band(ctx, w, -h / 2 + 0.12, 0.2);
+    if (!sh.nose) band(ctx, w, h / 2 - 0.12, 0.2);
+  };
+
   function drawAdapter(ctx, st, d) {
     const w = d.w, h = d.h, tw = d.topW;
     ctx.beginPath();

@@ -53,6 +53,10 @@
   let _scen = [];
 
   /** cached, geometry-only aerodynamic summary */
+  // a shroud is a smooth casing, so it meets a crosswind far more kindly than
+  // the bare nozzle and plumbing it is covering
+  const SHROUD_CD = 0.32;
+
   function aeroOf(v) {
     if (v._aero) return v._aero;
     let maxW = 0, top = null, bot = null, damp = 0;
@@ -61,11 +65,24 @@
       maxW = Math.max(maxW, p.def.w);
       if (!top || p.ly > top.ly) top = p;
       if (!bot || p.ly < bot.ly) bot = p;
+      if (p.def.chute) chutes.push(p);
+      // what a shroud has swallowed is out of the airstream: the casing over it
+      // presents the airflow one smooth surface instead (added below)
+      if (p.shrouded) continue;
       const area = p.def.w * p.def.h;
-      lat.push({ p, cdA: p.def.cd * area });
+      lat.push({ p, lx: p.lx, ly: p.ly, cdA: p.def.cd * area });
       const d = Math.hypot(p.lx - v.com.x, p.ly - v.com.y);
       damp += p.def.cd * area * d * d;
-      if (p.def.chute) chutes.push(p);
+    }
+    if (v.shrouds) {
+      for (const sh of v.shrouds) {
+        const cdA = SHROUD_CD * sh.w * sh.h;
+        lat.push({ p: sh.sep, lx: sh.lx, ly: sh.ly, cdA: cdA });
+        const d = Math.hypot(sh.lx - v.com.x, sh.ly - v.com.y);
+        damp += cdA * d * d;
+        // a shroud that closes over the top of the stack is the nose now
+        if (sh.nose && (!top || sh.ly + sh.h / 2 > top.ly)) top = { ly: sh.ly + sh.h / 2, def: { cd: 0.28 } };
+      }
     }
     v._aero = {
       areaAx: Math.PI / 4 * maxW * maxW,
@@ -105,15 +122,6 @@
     collideVessels(vessels, t);
   };
 
-  /**
-   * A destroyed craft is not flown any more, but it is still *somewhere* — the
-   * camera holds on the wreck for five seconds while it burns. Leaving its
-   * world coordinates untouched used to mean leaving it where it died; now
-   * that Earth laps the Sun at two kilometres a second, standing still in
-   * world space means sliding past the ground at two kilometres a second,
-   * which sent the view diving the instant anything blew up. So a wreck on the
-   * ground rides the ground, and one still in the air coasts ballistically.
-   */
   const coastWreck = PH.driftWreck = function (v, dt, t) {
     // A wreck is not flown any more — the camera parks on it for five seconds
     // while the fireball burns. So all it has to do is stay where the craft
@@ -393,7 +401,9 @@
         for (const it of A.lat) {
           const f = k * it.cdA;
           const fx = -lvx * f, fy = -lvy * f;
-          v.worldOf(it.p, _wp);
+          // by local coordinates, not by part, so a shroud pulls at its own
+          // centre rather than at the separator it belongs to
+          v.worldOfLocal(it.lx, it.ly, _wp);
           Fx += fx; Fy += fy;
           Tq += ((_wp.x - v.x) * fy - (_wp.y - v.y) * fx) * AERO_TQ;
         }
@@ -555,7 +565,7 @@
       p._hx = 0.5 * (p.def.w * Math.abs(px) + p.def.h * Math.abs(py));
     }
     for (const p of ps) {
-      let shade = 1, prot = 0;
+      let shade = p.shrouded ? HEAT_SHADOW : 1, prot = 0;
       for (const o of ps) {
         if (o === p || o._hs <= p._hs + 0.05) continue;             // not in front
         if (Math.abs(o._hq - p._hq) > o._hx + p._hx) continue;      // not in the way

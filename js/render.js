@@ -1189,6 +1189,17 @@
       p.def.draw(ctx, p, p.def);
       ctx.restore();
     }
+    // shrouds last: they close over the hardware they are covering
+    if (v.shrouds && v.shrouds.length) {
+      for (const sh of v.shrouds) {
+        v.worldOfLocal(sh.lx, sh.ly, _pw);
+        ctx.save();
+        ctx.translate(_pw.x - cam.x, _pw.y - cam.y);
+        ctx.rotate(v.angle);
+        S.drawShroud(ctx, sh);
+        ctx.restore();
+      }
+    }
     if (v.heatGlow > 0.08) drawPlasma(ctx, v, t, zoom);
   };
 

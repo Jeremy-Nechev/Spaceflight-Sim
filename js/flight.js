@@ -108,25 +108,20 @@
   }
 
   /* ═══════════════════ launch sites ═══════════════════
-     Earth has four launch complexes. Only the home pad is open to begin with:
-     the others have to be flown to and landed at before you can start a
-     mission from them. */
+     Earth has four launch complexes and all of them are open from the start —
+     picking where to fly from is a choice, not something to be earned.
+     Landing at one you have not used before is still worth a mission-log
+     badge (see checkGoals), it just isn't a gate. */
 
   F.launchSite = U.store.get('launchSite', 'home');
   if (!W.sites.some(x => x.id === F.launchSite)) F.launchSite = 'home';
 
-  F.siteUnlocked = function (id) {
-    return id === 'home' || !!F.progress['site:' + id];
-  };
+  F.siteUnlocked = function () { return true; };
 
   /** the site a new launch will start from */
-  F.site = function () {
-    const st = W.site(F.launchSite);
-    return F.siteUnlocked(st.id) ? st : W.site('home');
-  };
+  F.site = function () { return W.site(F.launchSite); };
 
   F.setLaunchSite = function (id) {
-    if (!F.siteUnlocked(id)) { F.toast('That pad has to be visited before you can launch from it', 'bad'); return false; }
     F.launchSite = id;
     U.store.set('launchSite', id);
     return true;
@@ -790,7 +785,7 @@
       if (st && Math.abs(U.wrap(th2 - st.theta)) * b.radius < 2500 && !F.progress['site:' + st.id]) {
         F.progress['site:' + st.id] = true;
         U.store.set('progress', F.progress);
-        F.toast('★ ' + st.padName + ' is now open for launches', 'gold');
+        F.toast('Touched down at ' + st.padName, 'gold');
         if (S.audio) S.audio.blip(880, 0.18, 'sine', 0.12);
         if (!st.home) unlock('cityPad');
       }

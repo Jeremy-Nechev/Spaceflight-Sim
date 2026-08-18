@@ -445,6 +445,15 @@
       ctx.restore();
     }
 
+    // the shrouds the separators will fly with — shown here so the hangar
+    // matches what launches (see V.shroudsFor)
+    for (const sh of S.vessel.shroudsFor(B.parts)) {
+      ctx.save();
+      ctx.translate(sh.lx, sh.ly);
+      S.drawShroud(ctx, sh);
+      ctx.restore();
+    }
+
     // stage badges
     if (z > 4) drawBadges(ctx, z);
 

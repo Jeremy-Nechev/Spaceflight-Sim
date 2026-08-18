@@ -302,7 +302,66 @@
     }
     for (const p of ps) if (p.def.type === 'sep') p.comp = -1;
     this.ncomp = c;
+    this.shrouds = V.shroudsFor(ps);
     this._dirty = false;
+  };
+
+  /* ═══════════════════ aerodynamic shrouds ═══════════════════ */
+
+  /** does a part's width fit wholly inside a shroud of half-width `hw` about `cx`? */
+  function tucked(p, cx, hw) {
+    return Math.abs(p.lx - cx) + p.def.w / 2 <= hw + 0.02 && p.def.w <= hw * 2 - 0.1;
+  }
+
+  /**
+   * Every in-line separator grows a shroud automatically: a smooth casing that
+   * reaches up from the separator over whatever the stage above tucks inside it
+   * — its engine, normally — and stops where the stack goes back to being a
+   * tank, a pod or full width again. That is what an interstage is, and it
+   * means the vacuum engine of an upper stage is no longer flown through the
+   * airstream as a bare nozzle.
+   *
+   * Marks what it covers with `p.shrouded` so the aerodynamics and the heating
+   * stop treating those parts as exposed, and returns one descriptor per
+   * shroud: { sep, lx, ly, w, h, nose }, in the craft's own coordinates.
+   *
+   * Shared by the flight model and the VAB so the hangar shows what will fly.
+   * A shroud is drawn and flown but weighs nothing: it comes with the
+   * separator rather than being a part you pay for.
+   */
+  V.shroudsFor = function (parts) {
+    for (let i = 0; i < parts.length; i++) parts[i].shrouded = false;
+    const out = [];
+    for (const s of parts) {
+      if (s.def.type !== 'sep' || s.def.radial || s.fired) continue;
+      const hw = s.def.w / 2;
+      const base = s.ly + s.def.h / 2;
+
+      // everything stacked above it whose width overlaps the casing at all,
+      // lowest first — anything that doesn't fit inside is what stops it
+      const above = parts.filter(p => p !== s && p.ly > s.ly &&
+        Math.abs(p.lx - s.lx) < hw + p.def.w / 2 - 0.02).sort((a, b) => a.ly - b.ly);
+
+      const inside = [];
+      let reach = base, blocked = null;
+      for (const p of above) {
+        const lo = p.ly - p.def.h / 2, hi = p.ly + p.def.h / 2;
+        if (lo > reach + 0.08) break;                      // a gap: nothing to bridge
+        // a tank, a pod, a parachute or anything as wide as the separator is
+        // the stage proper — the shroud ends underneath it
+        const body = p.def.fuel > 0 || p.def.type === 'pod' || p.def.chute;
+        if (body || !tucked(p, s.lx, hw)) { blocked = p; break; }
+        inside.push(p);
+        if (hi > reach) reach = hi;
+      }
+      if (!inside.length) continue;
+      const top = blocked ? Math.max(reach, blocked.ly - blocked.def.h / 2) : reach;
+      const h = top - base;
+      if (h < 0.2) continue;
+      out.push({ sep: s, lx: s.lx, ly: base + h / 2, w: s.def.w, h: h, nose: !blocked });
+      for (const p of inside) p.shrouded = true;
+    }
+    return out;
   };
 
   /** total / capacity fuel, optionally restricted to one compartment */

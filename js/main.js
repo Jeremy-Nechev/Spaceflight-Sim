@@ -411,17 +411,14 @@
     const info = document.getElementById('siteInfo');
     if (!sel || !info) return;
     info.classList.toggle('hidden', scene !== 'build');
-    if (sel.options.length !== W.sites.length || sel._locked !== W.sites.filter(x => F.siteUnlocked(x.id)).length) {
+    if (sel.options.length !== W.sites.length) {
       sel.innerHTML = '';
       for (const st of W.sites) {
         const o = document.createElement('option');
-        const open = F.siteUnlocked(st.id);
         o.value = st.id;
-        o.textContent = (open ? '' : '🔒 ') + st.name;
-        o.disabled = !open;
+        o.textContent = st.name;
         sel.appendChild(o);
       }
-      sel._locked = W.sites.filter(x => F.siteUnlocked(x.id)).length;
     }
     sel.value = F.launchSite;
     const st = F.site();
