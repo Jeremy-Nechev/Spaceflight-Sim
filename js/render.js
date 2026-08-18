@@ -819,7 +819,26 @@
   const MAXP = 6000;
   FX.onNote = null;
 
+  // Particles used to live in a frame where the world stood still, so "slows
+  // to a stop" meant stopping at the origin. Earth now laps the Sun at two
+  // kilometres a second, and settling into *that* frame drags every puff off
+  // the pad — smoke drifted metres clear of the nozzle within a second.
+  // Everything that damps toward rest, or is born at rest, measures against
+  // this instead: the velocity of the world the effects are happening on.
+  // FX.update refreshes it each frame from the body it is handed.
+  const frame = { x: 0, y: 0 };
+
+  // The sim advances in sub-steps and effects are spawned part-way through a
+  // frame, but FX.update then integrates everything by the whole frame. That
+  // over-shoot was worth a metre back when a puff's velocity was its speed
+  // through the air; now it also carries its planet's two-kilometre-a-second
+  // trip round the Sun, and half a sub-step of that leaves the smoke hanging
+  // ten metres above the nozzle. So a particle records the sim time it was
+  // born at and only ever integrates the time it has actually existed.
+  FX.clock = 0;
+
   function push(o) {
+    o.born = FX.clock;
     if (o.bounce == null) o.bounce = 0;      // how much it rebounds off the ground
     if (o.gdrag == null) o.gdrag = 0.90;     // how fast it slows once it's down
     // At the budget, retire the oldest rather than refusing the newest.
@@ -837,6 +856,13 @@
   function radiusOf(p) {
     return U.lerp(p.r0, p.r1, Math.sqrt(p.life / p.max));
   }
+
+  /** Point the effects at the world they are happening on (see `frame`). */
+  FX.frameFrom = function (body, t) {
+    const bv = body ? W.bodyVel(body, t) : null;
+    frame.x = bv ? bv.x : 0;
+    frame.y = bv ? bv.y : 0;
+  };
 
   FX.note = function (msg, kind) { if (FX.onNote) FX.onNote(msg, kind); };
 
@@ -916,7 +942,10 @@
       push({
         x: v.x + ux * R0 * 0.35 - uy * j,
         y: v.y + uy * R0 * 0.35 + ux * j,
-        vx: v.vx * 0.6 - ux * back, vy: v.vy * 0.6 - uy * back,
+        // trails back through the air, so the fraction kept is of the speed
+        // through the air — not of the raw heliocentric velocity
+        vx: frame.x + (v.vx - frame.x) * 0.6 - ux * back,
+        vy: frame.y + (v.vy - frame.y) * 0.6 - uy * back,
         life: 0, max: 0.45 + Math.random() * 1.1,
         r0: R0 * 0.14, r1: R0 * (0.5 + Math.random() * 0.9),
         col: Math.random() < 0.55 ? [255, 214, 138] : [255, 138, 58],
@@ -927,7 +956,7 @@
 
   FX.dust = function (v, b, t, speed) {
     const n = Math.min(22, 4 + speed * 1.2);
-    const bp = W.bodyPos(b, t);
+    const bp = W.bodyPos(b, t), bv = W.bodyVel(b, t);
     const nx = (v.x - bp.x), ny = (v.y - bp.y);
     const l = Math.hypot(nx, ny) || 1;
     for (let i = 0; i < n; i++) {
@@ -936,8 +965,8 @@
       const dx = -ny / l, dy = nx / l;
       push({
         x: v.x, y: v.y,
-        vx: v.vx * 0.2 + dx * s * Math.cos(a) + (nx / l) * s * 0.5,
-        vy: v.vy * 0.2 + dy * s * Math.cos(a) + (ny / l) * s * 0.5,
+        vx: bv.x + (v.vx - bv.x) * 0.2 + dx * s * Math.cos(a) + (nx / l) * s * 0.5,
+        vy: bv.y + (v.vy - bv.y) * 0.2 + dy * s * Math.cos(a) + (ny / l) * s * 0.5,
         life: 0, max: 2.6 + Math.random() * 2.2, r0: 0.4, r1: 5 + Math.random() * 6,
         col: [190, 180, 160], a0: 0.5, drag: 1.1, grav: 0.35,
         gdrag: 0.88, bounce: 0.08
@@ -950,7 +979,7 @@
     for (let i = 0; i < n; i++) {
       const a = Math.random() * U.TAU, s = 3 + Math.random() * speed * 0.7;
       push({
-        x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+        x, y, vx: frame.x + Math.cos(a) * s, vy: frame.y + Math.sin(a) * s,
         life: 0, max: 1.4 + Math.random() * 1.4, r0: 0.3, r1: 1.9,
         col: [210, 240, 255], a0: 0.85, drag: 0.9, grav: 1,
         gdrag: 0.6, bounce: 0.25
@@ -967,7 +996,7 @@
       const a = Math.random() * U.TAU, s = 2 + Math.random() * Math.min(40, speed * 0.6);
       push({
         x: x + (Math.random() - 0.5) * o.w, y: y + (Math.random() - 0.5) * o.h,
-        vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+        vx: frame.x + Math.cos(a) * s, vy: frame.y + Math.sin(a) * s,
         life: 0, max: 2.6 + Math.random() * 2.4,
         r0: o.w * 0.09, r1: o.w * 0.16,
         col, a0: 0.95, drag: 0.35, grav: 1,
@@ -984,7 +1013,8 @@
       const a = Math.random() * U.TAU, s = 20 + Math.random() * 110;
       push({
         x: v.x + (Math.random() - 0.5) * R0, y: v.y + (Math.random() - 0.5) * R0,
-        vx: v.vx * 0.5 + Math.cos(a) * s, vy: v.vy * 0.5 + Math.sin(a) * s,
+        vx: frame.x + (v.vx - frame.x) * 0.5 + Math.cos(a) * s,
+        vy: frame.y + (v.vy - frame.y) * 0.5 + Math.sin(a) * s,
         life: 0, max: 0.6 + Math.random() * 0.8,
         r0: R0 * 0.12, r1: R0 * 0.65,
         col: [255, 190, 90], a0: 1, drag: 0.8, grav: 0,
@@ -997,7 +1027,8 @@
       const a = Math.random() * U.TAU, s = 70 + Math.random() * 190;
       push({
         x: v.x + (Math.random() - 0.5) * R0 * 0.6, y: v.y + (Math.random() - 0.5) * R0 * 0.6,
-        vx: v.vx * 0.5 + Math.cos(a) * s, vy: v.vy * 0.5 + Math.sin(a) * s,
+        vx: frame.x + (v.vx - frame.x) * 0.5 + Math.cos(a) * s,
+        vy: frame.y + (v.vy - frame.y) * 0.5 + Math.sin(a) * s,
         life: 0, max: 0.25 + Math.random() * 0.55,
         r0: R0 * 0.03, r1: R0 * 0.09,
         col: [255, 235, 180], a0: 1, drag: 1.4, grav: 0.4,
@@ -1012,7 +1043,8 @@
       const dark = Math.random() < 0.55;
       push({
         x: v.x + (Math.random() - 0.5) * R0 * 1.4, y: v.y + (Math.random() - 0.5) * R0 * 1.4,
-        vx: v.vx * 0.5 + Math.cos(a) * s, vy: v.vy * 0.5 + Math.sin(a) * s,
+        vx: frame.x + (v.vx - frame.x) * 0.5 + Math.cos(a) * s,
+        vy: frame.y + (v.vy - frame.y) * 0.5 + Math.sin(a) * s,
         life: 0, max: 6 + Math.random() * 7,
         r0: R0 * 0.2, r1: R0 * (2.4 + Math.random() * 1.4),
         col: dark ? [35, 33, 32] : [95, 92, 88],
@@ -1028,7 +1060,7 @@
     for (let i = 0; i < 10; i++) {
       const a = Math.random() * U.TAU, s = 2 + Math.random() * 8;
       push({
-        x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+        x, y, vx: frame.x + Math.cos(a) * s, vy: frame.y + Math.sin(a) * s,
         life: 0, max: 0.6 + Math.random() * 0.6, r0: r * 0.2, r1: r * 1.1,
         col: [220, 220, 226], a0: 0.6, drag: 1.2, grav: 0
       });
@@ -1043,21 +1075,31 @@
   FX.update = function (dt, t, body) {
     const g = { x: 0, y: 0 };
     const bp = body ? W.bodyPos(body, t) : null;
+    FX.frameFrom(body, t);
     // only bother with terrain for particles actually near the surface
     const nearR = body ? body.radius + 5000 : 0;
 
     for (let i = parts.length - 1; i >= 0; i--) {
       const p = parts[i];
-      p.life += dt;
+      // only the slice of this frame the particle has been alive for
+      // (a load or a revert can wind the clock back under a live particle —
+      // anything not born inside this frame just takes the whole step)
+      const h = p.born > t - dt && p.born <= t ? t - p.born : dt;
+      p.life += h;
       if (p.life >= p.max) { parts.splice(i, 1); continue; }
+      if (!h) continue;
       if (p.grav) {
         W.gravity(p.x, p.y, t, g);
-        p.vx += g.x * p.grav * dt;
-        p.vy += g.y * p.grav * dt;
+        p.vx += g.x * p.grav * h;
+        p.vy += g.y * p.grav * h;
       }
-      const d = Math.exp(-p.drag * dt);
-      p.vx *= d; p.vy *= d;
-      p.x += p.vx * dt; p.y += p.vy * dt;
+      // drag bleeds off motion *through the air*, and the air travels with
+      // its world — damping the raw velocity would blow every particle off a
+      // moving planet at that planet's orbital speed
+      const d = Math.exp(-p.drag * h);
+      p.vx = frame.x + (p.vx - frame.x) * d;
+      p.vy = frame.y + (p.vy - frame.y) * d;
+      p.x += p.vx * h; p.y += p.vy * h;
 
       if (!bp) continue;
       const dx = p.x - bp.x, dy = p.y - bp.y;
@@ -1074,7 +1116,8 @@
       const nx = dx / r, ny = dy / r;
       p.x = bp.x + nx * rest;
       p.y = bp.y + ny * rest;
-      const vn = p.vx * nx + p.vy * ny;
+      // into-ground speed is measured against the ground, which is moving
+      const vn = (p.vx - frame.x) * nx + (p.vy - frame.y) * ny;
       if (vn < 0) {
         // kill the into-ground component, keep a little rebound
         p.vx -= vn * nx * (1 + p.bounce);
@@ -1089,8 +1132,9 @@
         p.vx += -ny * kick; p.vy += nx * kick;
       }
       // scrub off sideways speed so it settles and spreads out
-      const k = Math.pow(p.gdrag, dt * 60);
-      p.vx *= k; p.vy *= k;
+      const k = Math.pow(p.gdrag, h * 60);
+      p.vx = frame.x + (p.vx - frame.x) * k;
+      p.vy = frame.y + (p.vy - frame.y) * k;
     }
   };
 

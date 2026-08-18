@@ -479,6 +479,10 @@
     if (v && !F.over && hudActive) applyInput(v, real);
 
     const simDt = dt * warp;
+    // effects spawned inside the step below belong to the world under the
+    // craft, and settle into its motion rather than into the Sun's frame
+    S.fx.frameFrom(v ? (v.nearBody || W.earth) : W.earth, F.t);
+
     if (rails) {
       // craft still collide with each other and with the ground while the
       // clock is wound forward — see PH.rails for the swept tests that makes
@@ -498,6 +502,7 @@
     W.t = F.t;
 
     S.fx.update(rails ? 0 : dt, F.t, v ? (v.nearBody || W.earth) : W.earth);
+    S.fx.clock = F.t;                      // anything spawned below is born now
     cleanup();
     checkGoals();
 

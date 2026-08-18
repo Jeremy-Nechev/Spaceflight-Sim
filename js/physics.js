@@ -95,6 +95,9 @@
   /* ═══════════════════ main step ═══════════════════ */
 
   PH.step = function (vessels, dt, t) {
+    // effects spawned during this step are stamped with its time, so the
+    // renderer knows not to integrate them for the whole frame (see FX.clock)
+    if (S.fx) S.fx.clock = t;
     for (let i = 0; i < vessels.length; i++) {
       const v = vessels[i];
       if (!v.dead) stepVessel(v, dt, t);
@@ -756,6 +759,7 @@
     const h = dt / n;
     for (let i = 0; i < n; i++) {
       const t0 = t + h * i, t1 = t0 + h;
+      if (S.fx) S.fx.clock = t0;
       for (const v of vessels) {
         if (v.dead || v.crash) continue;
         v._px = v.x; v._py = v.y; v._pvx = v.vx; v._pvy = v.vy;
