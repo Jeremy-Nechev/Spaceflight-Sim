@@ -401,6 +401,7 @@ body.hasMissions .overlay{padding-bottom:calc(var(--missionH) + 24px)}
 body.hasMissions .menuCard{max-height:calc(100vh - var(--missionH) - 44px);overflow-y:auto}
 body.hasMissions .panel{top:calc(50% - var(--missionH) / 2)}
 body.hasMissions #buildHint{bottom:calc(var(--missionH) + 26px)}
+body.hasMissions #tankPaint{bottom:calc(var(--missionH) + 62px)}
 /* the widget is centred, so on a wide screen it clears the side panels by
    itself — only squeeze them when the screen is too narrow for that */
 @media (max-width:1000px){
@@ -453,3 +454,19 @@ body.hasMissions #buildHint{bottom:calc(var(--missionH) + 26px)}
 /* time and conditions read as one line each — wrapping them looks broken */
 #timeRow b, #wxRow b { white-space: nowrap; font-size: 11px; }
 #timeRow span, #wxRow span { white-space: nowrap; }
+
+/* ── tank paint picker (VAB) ── */
+#tankPaint {
+  position: absolute; left: 50%; bottom: 62px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 8px; z-index: 20;
+  background: rgba(10,16,28,.88); border: 1px solid var(--edge); border-radius: 20px;
+  padding: 6px 12px; font-size: 12px; color: var(--dim);
+}
+#tankPaint.hidden { display: none; }
+#tankSwatches { display: flex; gap: 6px; }
+#tankSwatches button {
+  width: 22px; height: 22px; border-radius: 50%; padding: 0;
+  border: 2px solid rgba(255,255,255,.18); cursor: pointer;
+}
+#tankSwatches button.on { border-color: #4da3ff; box-shadow: 0 0 0 2px rgba(77,163,255,.28); }
+#tankPaint #tankAll { font-size: 11px; padding: 4px 9px; border-radius: 12px; }

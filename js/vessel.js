@@ -34,6 +34,7 @@
       active: false, fired: false, chute: 0, chuteOut: false,
       deployed: def.type === 'leg',
       comp: 0, throttle: 0,
+      col: spec.col || null,     // hangar paint, tanks only (see S.TANK_COLS)
       temp: 0                    // accumulated friction heat (see physics.js)
     };
   }
@@ -74,7 +75,7 @@
   V.toBlueprint = function (parts, stages, name) {
     return {
       name: name || 'Rocket',
-      parts: parts.map(p => ({ uid: p.uid, id: p.id, x: p.lx, y: p.ly, flip: p.flip })),
+      parts: parts.map(p => ({ uid: p.uid, id: p.id, x: p.lx, y: p.ly, flip: p.flip, col: p.col || undefined })),
       stages: (stages || []).map(g => g.slice())
     };
   };
@@ -87,7 +88,7 @@
   V.toState = function (v) {
     return {
       parts: v.parts.map(p => ({
-        uid: p.uid, id: p.id, x: p.lx, y: p.ly, flip: p.flip,
+        uid: p.uid, id: p.id, x: p.lx, y: p.ly, flip: p.flip, col: p.col || undefined,
         fuel: p.fuel, active: p.active, fired: p.fired,
         chute: p.chute, chuteOut: p.chuteOut, deployed: p.deployed,
         temp: p.temp, cut: p.cut
@@ -346,7 +347,9 @@
       let reach = base, blocked = null;
       for (const p of above) {
         const lo = p.ly - p.def.h / 2, hi = p.ly + p.def.h / 2;
-        if (lo > reach + 0.08) break;                      // a gap: nothing to bridge
+        // a real gap means the stack has ended; a hand-nudged part sitting a
+        // grid step out is still the same stack
+        if (lo > reach + 0.3) break;
         // a tank, a pod, a parachute or anything as wide as the separator is
         // the stage proper — the shroud ends underneath it
         const body = p.def.fuel > 0 || p.def.type === 'pod' || p.def.chute;
@@ -358,7 +361,14 @@
       const top = blocked ? Math.max(reach, blocked.ly - blocked.def.h / 2) : reach;
       const h = top - base;
       if (h < 0.2) continue;
-      out.push({ sep: s, lx: s.lx, ly: base + h / 2, w: s.def.w, h: h, nose: !blocked });
+      // Wrap onto whatever it meets: the casing tapers from the separator's
+      // width up to the width of the part it butts against, so the profile
+      // steps down in one clean slope instead of a cylinder ending in a ledge.
+      // Never wider at the top than at the bottom — a shroud that flared out
+      // past its own separator would be presenting frontal area the drag model
+      // doesn't know about.
+      const topW = blocked ? Math.min(s.def.w, blocked.def.w) : s.def.w;
+      out.push({ sep: s, lx: s.lx, ly: base + h / 2, w: s.def.w, topW: topW, h: h, nose: !blocked });
       for (const p of inside) p.shrouded = true;
     }
     return out;

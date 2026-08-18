@@ -38,6 +38,17 @@
   /* ─────────────────── artwork helpers ─────────────────── */
 
   const SHELL_L = '#f4f7fb', SHELL_M = '#ccd5e1', SHELL_D = '#7b8595';
+  /* Paint for fuel tanks. Three finishes, because these are the three every
+     real launcher has worn: bare white insulation, unpainted metal, and sprayed
+     foam. Chosen in the hangar per tank (see B.setColor) and carried through
+     blueprints and save games on the part itself. */
+  const TANK_COLS = S.TANK_COLS = {
+    white: { name: 'White', l: '#f4f7fb', m: '#ccd5e1', d: '#7b8595', chip: '#e8eef7' },
+    gray: { name: 'Gray', l: '#ccd1d8', m: '#9ba2ad', d: '#5b626d', chip: '#a9b0ba' },
+    orange: { name: 'Orange', l: '#e9a862', m: '#c8752e', d: '#7c4319', chip: '#d4832f' }
+  };
+  S.TANK_COL_KEYS = ['white', 'gray', 'orange'];
+  function tankPaint(st) { return TANK_COLS[(st && st.col) || 'white'] || TANK_COLS.white; }
   const METAL_L = '#a8b0bb', METAL_M = '#767e8a', METAL_D = '#41474f';
   const DARK = '#2b3038';
   const ACCENT = '#e2673a';
@@ -88,8 +99,8 @@
   /* ─────────────────── shared draw routines ─────────────────── */
 
   function drawTank(ctx, st, d) {
-    const w = d.w, h = d.h;
-    ctx.fillStyle = cyl(ctx, w, SHELL_L, SHELL_M, SHELL_D);
+    const w = d.w, h = d.h, c = tankPaint(st);
+    ctx.fillStyle = cyl(ctx, w, c.l, c.m, c.d);
     ctx.fillRect(-w / 2, -h / 2, w, h);
     // subtle weld seams every ~2 m
     ctx.fillStyle = 'rgba(90,100,116,.28)';
@@ -102,14 +113,14 @@
 
   /** tank that narrows toward the top so a smaller stack sits flush on it */
   function drawTaperTank(ctx, st, d) {
-    const w = d.w, h = d.h, tw = d.topW;
+    const w = d.w, h = d.h, tw = d.topW, c = tankPaint(st);
     ctx.beginPath();
     ctx.moveTo(-w / 2, -h / 2);
     ctx.lineTo(-tw / 2, h / 2);
     ctx.lineTo(tw / 2, h / 2);
     ctx.lineTo(w / 2, -h / 2);
     ctx.closePath();
-    ctx.fillStyle = cyl(ctx, w, SHELL_L, SHELL_M, SHELL_D);
+    ctx.fillStyle = cyl(ctx, w, c.l, c.m, c.d);
     ctx.fill();
     ink(ctx, w);
     // seams follow the taper
@@ -185,14 +196,28 @@
 
   function drawPod(ctx, st, d) {
     const w = d.w, h = d.h, tw = w * 0.52;
+    // The capsule tapers up to a flat deck rather than a dome: that deck is
+    // what a parachute clamps onto, and it is the top face parts snap to.
+    const neck = h * 0.12;
     ctx.beginPath();
     ctx.moveTo(-w / 2, -h / 2);
-    ctx.lineTo(-tw / 2, h / 2 - h * 0.1);
-    ctx.quadraticCurveTo(0, h / 2 + h * 0.06, tw / 2, h / 2 - h * 0.1);
+    ctx.lineTo(-tw / 2, h / 2 - neck);
+    ctx.lineTo(-tw / 2, h / 2);
+    ctx.lineTo(tw / 2, h / 2);
+    ctx.lineTo(tw / 2, h / 2 - neck);
     ctx.lineTo(w / 2, -h / 2);
     ctx.closePath();
     ctx.fillStyle = cyl(ctx, w, SHELL_L, SHELL_M, SHELL_D);
     ctx.fill(); ink(ctx, w);
+    // the deck plate itself, a little proud of the neck, with clamp lugs
+    const dw = tw * 1.22;
+    ctx.fillStyle = 'rgba(96,106,122,.95)';
+    ctx.fillRect(-dw / 2, h / 2 - h * 0.045, dw, h * 0.045);
+    ctx.fillStyle = 'rgba(255,255,255,.16)';
+    ctx.fillRect(-dw / 2, h / 2 - h * 0.012, dw, h * 0.012);
+    ctx.fillStyle = 'rgba(60,68,80,.9)';
+    ctx.fillRect(-dw / 2, h / 2 - h * 0.085, dw * 0.1, h * 0.04);
+    ctx.fillRect(dw / 2 - dw * 0.1, h / 2 - h * 0.085, dw * 0.1, h * 0.04);
     // heat shield
     ctx.fillStyle = '#3b4048';
     ctx.fillRect(-w / 2, -h / 2, w, h * 0.11);
@@ -238,30 +263,38 @@
    */
   S.drawShroud = function (ctx, sh) {
     const w = sh.w, h = sh.h;
-    const cone = sh.nose ? Math.min(w * 0.62, h * 0.5) : 0;
-    const body = h - cone;
+    const tw = sh.nose ? w : Math.min(sh.topW == null ? w : sh.topW, w);
+    // short straight collars top and bottom, so the taper starts and ends on a
+    // real joint rather than at a knife edge
+    const lip = Math.min(0.2, h * 0.25);
+    const cone = sh.nose ? Math.min(w * 0.62, h * 0.55) : 0;
     ctx.beginPath();
     ctx.moveTo(-w / 2, -h / 2);
-    ctx.lineTo(-w / 2, -h / 2 + body);
+    ctx.lineTo(-w / 2, -h / 2 + lip);
     if (cone > 0) {
-      ctx.quadraticCurveTo(-w * 0.44, h / 2 - cone * 0.1, 0, h / 2);
-      ctx.quadraticCurveTo(w * 0.44, h / 2 - cone * 0.1, w / 2, -h / 2 + body);
+      ctx.lineTo(-w * 0.34, h / 2 - cone);
+      ctx.quadraticCurveTo(-w * 0.3, h / 2 - cone * 0.18, 0, h / 2);
+      ctx.quadraticCurveTo(w * 0.3, h / 2 - cone * 0.18, w * 0.34, h / 2 - cone);
     } else {
-      ctx.lineTo(w / 2, -h / 2 + body);
+      ctx.lineTo(-tw / 2, h / 2 - lip);
+      ctx.lineTo(-tw / 2, h / 2);
+      ctx.lineTo(tw / 2, h / 2);
+      ctx.lineTo(tw / 2, h / 2 - lip);
     }
+    ctx.lineTo(w / 2, -h / 2 + lip);
     ctx.lineTo(w / 2, -h / 2);
     ctx.closePath();
     ctx.fillStyle = cyl(ctx, w, SHELL_L, SHELL_M, SHELL_D);
     ctx.fill();
     ink(ctx, w);
-    // the split line the two halves come apart along, and a shoulder band
+    // the split line the two halves come apart along, and a band at each joint
     ctx.strokeStyle = 'rgba(70,80,96,.5)';
     ctx.lineWidth = Math.max(0.03, w * 0.016);
     ctx.beginPath();
     ctx.moveTo(0, -h / 2 + 0.05); ctx.lineTo(0, h / 2 - 0.05);
     ctx.stroke();
-    band(ctx, w, -h / 2 + 0.12, 0.2);
-    if (!sh.nose) band(ctx, w, h / 2 - 0.12, 0.2);
+    band(ctx, w, -h / 2 + lip / 2, Math.min(0.2, lip));
+    if (!sh.nose) band(ctx, tw, h / 2 - lip / 2, Math.min(0.2, lip));
   };
 
   function drawAdapter(ctx, st, d) {
@@ -320,15 +353,19 @@
 
   function drawChute(ctx, st, d) {
     const w = d.w, h = d.h;
-    // the pack itself is a squat can, a touch narrower than the stack it sits
-    // on, with a mounting collar underneath rather than a full-width block
-    const pw = w * 0.82;
+    // A small can that clamps down onto the deck below it: a pair of jaws at
+    // the bottom, the packed canopy above them, and a lid. Nothing about it
+    // needs to match the width of what it is bolted to.
+    const pw = w * 0.78;
+    ctx.fillStyle = 'rgba(74,82,95,.95)';
+    ctx.fillRect(-w / 2, -h / 2, w, h * 0.26);                  // the clamp
+    ctx.fillStyle = 'rgba(40,46,56,.9)';
+    ctx.fillRect(-w / 2, -h / 2 + h * 0.09, w, h * 0.06);
     ctx.fillStyle = cyl(ctx, pw, METAL_L, METAL_M, METAL_D);
-    U.roundRect(ctx, -pw / 2, -h / 2 + h * 0.12, pw, h * 0.88, pw * 0.22); ctx.fill(); ink(ctx, pw);
-    ctx.fillStyle = 'rgba(70,78,90,.95)';
-    ctx.fillRect(-w / 2, -h / 2, w, h * 0.16);
+    U.roundRect(ctx, -pw / 2, -h / 2 + h * 0.24, pw, h * 0.76, pw * 0.26);
+    ctx.fill(); ink(ctx, pw);
     ctx.fillStyle = ACCENT;
-    ctx.fillRect(-pw / 2, h / 2 - h * 0.24, pw, h * 0.16);
+    ctx.fillRect(-pw / 2, h / 2 - h * 0.2, pw, h * 0.13);       // the lid
     if (st && st.chute > 0.001) {
       const t = st.chute;                       // 0..1 inflation
       const cw = d.chute.width * (0.25 + 0.75 * t);
@@ -591,14 +628,14 @@
   add({ id: 'fin_s', name: 'Fin', cat: 'Aero', type: 'fin', w: 1.5, h: 2.0, mass: 50, radial: true, cd: 2.1, draw: drawFin, desc: 'Keeps the nose pointing forward in air.' });
   add({ id: 'fin_l', name: 'Big Fin', cat: 'Aero', type: 'fin', w: 2.5, h: 3.0, mass: 140, radial: true, cd: 2.3, draw: drawFin, desc: 'Twice the bite. Heavy.' });
   add({
-    id: 'chute', name: 'Parachute', cat: 'Aero', type: 'chute', w: 1, h: 0.75, mass: 85, cd: 0.9,
+    id: 'chute', name: 'Parachute', cat: 'Aero', type: 'chute', w: 0.55, h: 0.34, mass: 85, cd: 0.9,
     chute: { area: 240, cd: 1.3, width: 9, riser: 5.5 },
-    desc: 'Brings a light capsule down at about 9 m/s.', draw: drawChute
+    desc: 'Tiny can. Clamps onto any capsule deck; brings a light one down at about 9 m/s.', draw: drawChute
   });
   add({
-    id: 'chute_l', name: 'Big Chute', cat: 'Aero', type: 'chute', w: 2, h: 1.0, mass: 210, cd: 0.9,
+    id: 'chute_l', name: 'Big Chute', cat: 'Aero', type: 'chute', w: 0.95, h: 0.46, mass: 210, cd: 0.9,
     chute: { area: 700, cd: 1.3, width: 17, riser: 9 },
-    desc: 'For heavy capsules coming home hot.', draw: drawChute
+    desc: 'Clamps on like the small one. For heavy capsules coming home hot.', draw: drawChute
   });
   add({
     id: 'shield_s', name: 'Heat Shield S', cat: 'Aero', type: 'shield',

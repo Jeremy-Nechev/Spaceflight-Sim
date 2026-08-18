@@ -29,7 +29,7 @@
   /* ═══════════════════ blueprint helpers ═══════════════════ */
 
   function snapshot() {
-    return JSON.stringify({ p: B.parts.map(p => ({ uid: p.uid, id: p.id, x: p.lx, y: p.ly, f: p.flip })), s: B.stages });
+    return JSON.stringify({ p: B.parts.map(p => ({ uid: p.uid, id: p.id, x: p.lx, y: p.ly, f: p.flip, col: p.col })), s: B.stages });
   }
 
   function pushUndo() {
@@ -45,7 +45,7 @@
   };
 
   function restore(o) {
-    B.parts = o.p.map(q => ({ uid: q.uid, id: q.id, def: P[q.id], lx: q.x, ly: q.y, flip: q.f })).filter(p => p.def);
+    B.parts = o.p.map(q => ({ uid: q.uid, id: q.id, def: P[q.id], lx: q.x, ly: q.y, flip: q.f, col: q.col || null })).filter(p => p.def);
     B.stages = (o.s || []).map(g => g.slice());
     B.parts.forEach(p => S.vessel.seedUid(p.uid));
     B.sel = null; B.chip = null;
@@ -54,7 +54,7 @@
   B.blueprint = function () {
     return {
       name: B.name,
-      parts: B.parts.map(p => ({ uid: p.uid, id: p.id, x: p.lx, y: p.ly, flip: p.flip })),
+      parts: B.parts.map(p => ({ uid: p.uid, id: p.id, x: p.lx, y: p.ly, flip: p.flip, col: p.col || undefined })),
       stages: B.stages.map(g => g.slice())
     };
   };
@@ -63,7 +63,7 @@
     undoStack = [];
     B.name = bp.name || 'Rocket';
     restore({
-      p: (bp.parts || []).map(q => ({ uid: q.uid || S.vessel.nextUid(), id: q.id, x: q.x, y: q.y, f: q.flip || 1 })),
+      p: (bp.parts || []).map(q => ({ uid: q.uid || S.vessel.nextUid(), id: q.id, x: q.x, y: q.y, f: q.flip || 1, col: q.col })),
       s: bp.stages || []
     });
     if (!B.stages.length) B.autoStage();
@@ -173,7 +173,7 @@
   }
 
   function place(def, x, y, flip, uid) {
-    const p = { uid: uid || S.vessel.nextUid(), id: def.id, def, lx: x, ly: y, flip: flip || 1 };
+    const p = { uid: uid || S.vessel.nextUid(), id: def.id, def, lx: x, ly: y, flip: flip || 1, col: null };
     B.parts.push(p);
     return p;
   }
@@ -309,6 +309,24 @@
     };
   };
 
+  /* ═══════════════════ paint ═══════════════════ */
+
+  /** is this a part the paint applies to? */
+  B.paintable = p => !!p && p.def.type === 'tank';
+
+  /**
+   * Paint the selected tank, or every tank on the rocket when `all` is set —
+   * clicking through thirty tanks one at a time to get a uniform stack is not
+   * a design decision, it's an errand.
+   */
+  B.setColor = function (col, all) {
+    const list = all ? B.parts.filter(B.paintable) : (B.paintable(B.sel) ? [B.sel] : []);
+    if (!list.length) return;
+    pushUndo();
+    for (const p of list) p.col = col;
+    B.changed();
+  };
+
   /* ═══════════════════ camera / view ═══════════════════ */
 
   /** main.js hands us the canvas size so fit() works before the first draw */
@@ -441,7 +459,7 @@
       ctx.save();
       ctx.translate(p.lx, p.ly);
       if (p.flip < 0) ctx.scale(-1, 1);
-      p.def.draw(ctx, { fuel: 1, throttle: 0, deployed: true, chute: 0 }, p.def);
+      p.def.draw(ctx, { fuel: 1, throttle: 0, deployed: true, chute: 0, col: p.col }, p.def);
       ctx.restore();
     }
 

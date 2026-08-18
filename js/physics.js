@@ -76,7 +76,8 @@
     }
     if (v.shrouds) {
       for (const sh of v.shrouds) {
-        const cdA = SHROUD_CD * sh.w * sh.h;
+        // a tapered casing meets the air over its mean width
+        const cdA = SHROUD_CD * ((sh.w + (sh.topW == null ? sh.w : sh.topW)) / 2) * sh.h;
         lat.push({ p: sh.sep, lx: sh.lx, ly: sh.ly, cdA: cdA });
         const d = Math.hypot(sh.lx - v.com.x, sh.ly - v.com.y);
         damp += cdA * d * d;

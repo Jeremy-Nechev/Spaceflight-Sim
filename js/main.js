@@ -184,6 +184,7 @@
       // rebuilding the mission bar's DOM every frame tears down whatever the
       // player is about to click (buttons go stale mid-click) for no visible
       // benefit — a few times a second is plenty to keep it live
+      paintTankPaint(false);
       missionBarTimer -= dt;
       if (missionBarTimer <= 0) { paintMissionBar(); paintSiteInfo(); missionBarTimer = 0.5; }
     }
@@ -382,6 +383,25 @@
         else if (a === 'launch') doLaunch();
       };
     });
+    // tank paint: three finishes, on the selected tank or on all of them
+    const sw = document.getElementById('tankSwatches');
+    if (sw) {
+      for (const key of S.TANK_COL_KEYS) {
+        const b = document.createElement('button');
+        b.dataset.col = key;
+        b.title = S.TANK_COLS[key].name;
+        b.style.background = S.TANK_COLS[key].chip;
+        b.onclick = () => { B.setColor(key, false); if (S.audio) S.audio.ui(); paintTankPaint(true); };
+        sw.appendChild(b);
+      }
+    }
+    const allBtn = document.getElementById('tankAll');
+    if (allBtn) allBtn.onclick = () => {
+      const cur = (B.sel && B.sel.col) || 'white';
+      B.setColor(cur, true);
+      if (S.audio) S.audio.ui();
+    };
+
     const siteSel = document.getElementById('siteSel');
     if (siteSel) {
       siteSel.onchange = () => {
@@ -426,6 +446,23 @@
     info.textContent = st.padName + ' · ' + W.clockAt(W.earth, st.theta, F.t) +
       ' · ' + wx.label + ' · wind ' + Math.abs(wx.wind).toFixed(0) + ' m/s · ' +
       wx.temp.toFixed(0) + '°C';
+  }
+
+  /** show the paint picker whenever a tank is selected, and mark its colour */
+  let paintKey = '';
+  function paintTankPaint(force) {
+    const box = document.getElementById('tankPaint');
+    if (!box) return;
+    const on = scene === 'build' && B.paintable(B.sel);
+    const key = on ? (B.sel.uid + ':' + (B.sel.col || 'white')) : '';
+    if (key === paintKey && !force) return;
+    paintKey = key;
+    box.classList.toggle('hidden', !on);
+    if (!on) return;
+    const cur = B.sel.col || 'white';
+    for (const b of document.querySelectorAll('#tankSwatches button')) {
+      b.classList.toggle('on', b.dataset.col === cur);
+    }
   }
 
   function doLaunch() {
@@ -505,6 +542,18 @@
       F.setSas(e.currentTarget.dataset.sas || 'pro');
       F.paintXfer();
     };
+    const mus = document.getElementById('mMusic');
+    if (mus) {
+      const paint = () => { mus.textContent = '♪ Music: ' + (S.audio.music ? 'On' : 'Off'); };
+      S.audio.setMusic(U.store.get('music', true));
+      paint();
+      mus.onclick = () => {
+        if (S.audio) S.audio.init();
+        S.audio.setMusic(!S.audio.music);
+        U.store.set('music', S.audio.music);
+        paint();
+      };
+    }
     document.getElementById('endStay').onclick = () => F.hideEnd();
     document.getElementById('endRevert').onclick = () => F.revert();
     document.getElementById('endBuild').onclick = () => { F.hideEnd(); setScene('build'); };
