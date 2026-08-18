@@ -97,7 +97,8 @@
       stageIdx: v.stageIdx,
       x: v.x, y: v.y, vx: v.vx, vy: v.vy, angle: v.angle, omega: v.omega,
       throttle: v.throttle, sas: v.sas, sasTarget: v.sasTarget,
-      debris: !!v.debris, mission: v.mission || null
+      debris: !!v.debris, mission: v.mission || null,
+      launchSiteId: v.launchSiteId || null
     };
   };
 
@@ -123,6 +124,7 @@
     v.sas = st.sas || 'off'; v.sasTarget = st.sasTarget || 0;
     v.debris = !!st.debris;
     v.mission = st.mission || null;
+    v.launchSiteId = st.launchSiteId || null;
     return v;
   };
 

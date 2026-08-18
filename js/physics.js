@@ -45,9 +45,21 @@
   // harmless 2%, half that distance is uncomfortable, a tenth of it cooks
   // anything unshielded, and skimming the surface is measured in seconds.
   const SUN_HEAT = 1.64e14;
+  // A firing engine also cooks whatever's nearby that isn't its own stage —
+  // clustered boosters and tanks mounted close to somebody else's engine are a
+  // real risk, not a free lunch. Inverse-square from the nozzle, scaled by the
+  // engine's actual delivered thrust. Tuned so the stock Atlas II's SRBs (a
+  // 380 kN solid booster, its own centre about 5 m from the core tank) stay a
+  // safe, mildly-warm ~15% through their whole ~70 s burn, while anything
+  // clipped in close — under about 2 m from a large engine — cooks through in
+  // well under a minute.
+  const ENGINE_HEAT_K = 8e-7;
+  const ENGINE_HEAT_REACH = 12;      // metres — ignore anything farther off
+  const ENGINE_HEAT_MIN_D = 0.5;     // metres — floor, so point-blank can't divide by ~0
 
   const _g = { x: 0, y: 0 };
   const _wp = { x: 0, y: 0 };
+  const _wq = { x: 0, y: 0 };
   const _vp = { x: 0, y: 0 };
   let _pts = [];
   let _scen = [];
@@ -374,6 +386,7 @@
       Tq += rx * fy - ry * fx;
 
       if (S.fx) S.fx.exhaust(v, p, T, atmoF, dt, gi.alt);
+      engineHeat(v, p, T, dt);
     }
     v.liveThrust = liveThrust;
 
@@ -528,7 +541,12 @@
       const f = p.temp / p.def.heatTol;
       if (f > worst) worst = f;
       if (p.temp > hottest) hottest = p.temp;
-      if (f >= 1) (cooked = cooked || []).push(p);
+      // A part that a nearby engine has been cooking this step is marked
+      // before we get here (see engineHeat) — catch that before it's cleared,
+      // so a tank an engine cooked through in vacuum, nowhere near the Sun or
+      // any air, doesn't get blamed on either of them in the obituary.
+      if (f >= 1) { p._burnCause = p._engineHot ? 'engine' : v.cookedBy; (cooked = cooked || []).push(p); }
+      p._engineHot = false;
     }
     v.heatFrac = worst;
     v.heatGlow = hottest;
@@ -544,6 +562,31 @@
       S.fx.reentry(v, U.clamp(hottest / 0.6, 0, 1), dt, avx, avy);
     }
     if (cooked) for (const p of cooked) burnOff(v, p);
+  }
+
+  /**
+   * A firing engine radiates heat into any fuel tank nearby that isn't part
+   * of its own stage. "Its own stage" is whatever shares its rigid component —
+   * the same continuous structure the graph in rebuildGraph() already
+   * separates at every separator — so an engine never cooks the tank sitting
+   * directly on top of it (completely normal and expected) but a strap-on
+   * booster's engine absolutely can cook the tank of the stage it's clamped
+   * beside, or vice versa, if they're mounted close enough for long enough.
+   */
+  function engineHeat(v, p, T, dt) {
+    v.worldOf(p, _wp);
+    const ex = _wp.x, ey = _wp.y;
+    for (const q of v.parts) {
+      if (q === p || q.comp === p.comp || q.def.fuel <= 0) continue;
+      v.worldOf(q, _wq);
+      const dx = _wq.x - ex, dy = _wq.y - ey;
+      const d2 = dx * dx + dy * dy;
+      if (d2 > ENGINE_HEAT_REACH * ENGINE_HEAT_REACH) continue;
+      const shade = q.shrouded ? HEAT_SHADOW : 1;
+      const flux = (ENGINE_HEAT_K * T * shade) / Math.max(ENGINE_HEAT_MIN_D * ENGINE_HEAT_MIN_D, d2);
+      q.temp += flux * dt;
+      q._engineHot = true;         // read by applyHeat, for an accurate obituary
+    }
   }
 
   /**
@@ -580,17 +623,20 @@
   /** a part cooks off: it is gone, and losing the last pod takes the craft */
   function burnOff(v, p) {
     const podsLeft = v.parts.some(q => q !== p && q.def.type === 'pod');
+    const cause = p._burnCause;      // 'engine' | 'sun' | 'air' — see applyHeat
     v.worldOf(p, _wp);
     const i = v.parts.indexOf(p);
     if (i >= 0) v.parts.splice(i, 1);
     if (S.fx) {
       S.fx.puff(_wp.x, _wp.y, Math.max(1.5, p.def.w * 2));
-      if (v.mission) S.fx.note(p.def.name + ' burned away!', 'bad');
+      if (v.mission) {
+        S.fx.note(p.def.name + (cause === 'engine' ? ' cooked off by a nearby engine!' : ' burned away!'), 'bad');
+      }
     }
     if (S.audio) S.audio.boom(0.5);
     if (!v.parts.length || (p.def.type === 'pod' && !podsLeft)) {
-      v.crash = v.cookedBy === 'sun'
-        ? 'was cooked to pieces by the Sun'
+      v.crash = cause === 'engine' ? 'had a fuel tank cooked open by a nearby engine'
+        : cause === 'sun' ? 'was cooked to pieces by the Sun'
         : 'burned up in the atmosphere';
     }
     v._dirty = true; v._aero = null; v._radius = null;

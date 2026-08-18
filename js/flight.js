@@ -134,31 +134,63 @@
     const v = S.vessel.fromBlueprint(bp);
     if (!v) return null;
 
-    // if another craft is still sitting on the pad (e.g. launching a second
-    // rocket before the first has lifted off), nudge this one along the pad
-    // instead of spawning it stacked directly inside the other one
+    // If other craft are still sitting near this pad (e.g. launching a second
+    // rocket before the first has lifted off), slot this one in beside them
+    // instead of spawning it stacked directly inside one of them.
+    //
+    // This used to count how many vessels sat within a fixed 400 m of the
+    // exact pad point and pick an offset from that count. That only ever
+    // works for the first extra launch: it gets nudged out past the 400 m
+    // ring, so the *next* launch sees the same "1 parked" tally (just the
+    // original craft on the pad — nothing else is close enough to count) and
+    // picks the identical offset, landing squarely on the previous extra
+    // launch instead of past it. Every launch after the second piled onto
+    // that same spot, overlapping and colliding with one another.
+    //
+    // Now each candidate slot along the pad is actually tried in turn, and
+    // the first one that isn't within collision range of a live craft wins —
+    // checked with the same combined-radius test the collision system itself
+    // uses, so a slot that passes here is genuinely clear, however many
+    // craft are already queued.
     const site = F.site();
-    const pad = W.padPoint(F.t, site);
-    const parked = F.vessels.filter(x => !x.dead && Math.hypot(x.x - pad.x, x.y - pad.y) < 400).length;
-    const th = site.theta + (parked ? Math.ceil(parked / 2) * (parked % 2 ? 1 : -1) * 0.002 : 0);
+    const ep = W.bodyPos(W.earth, F.t), ev = W.bodyVel(W.earth, F.t);
+    const vr = v.radius();
+    const SLOT = vr * 2 + 20;      // metres between candidate slot centres
+    const MARGIN = 15;             // extra clearance on top of the two hulls
 
-    const g = W.terrain(W.earth, th);
     let lo = Infinity;
     for (const p of v.parts) lo = Math.min(lo, p.ly - p.def.h / 2);
     const clearance = v.com.y - lo;
-    const r = g + clearance + 0.06;
+
+    let th = site.theta, r = 0, gx = 0, gy = 0;
+    for (let slot = 0; slot < 60; slot++) {
+      const k = Math.ceil(slot / 2);
+      const off = slot === 0 ? 0 : k * (slot % 2 ? 1 : -1) * SLOT;
+      // small-angle: metres of arc → radians, at the planet's own radius
+      const cth = site.theta + off / W.earth.radius;
+      const cr = W.terrain(W.earth, cth) + clearance + 0.06;
+      const cx = ep.x + Math.cos(cth) * cr, cy = ep.y + Math.sin(cth) * cr;
+      th = cth; r = cr; gx = cx; gy = cy;
+      const clear = F.vessels.every(x => x.dead || Math.hypot(x.x - cx, x.y - cy) > x.radius() + vr + MARGIN);
+      if (clear) break;
+    }
+
     // Earth is going round the Sun, so the pad is a moving place: sit the
     // craft at Earth's position plus the pad offset, and give it Earth's
     // velocity or it would be left behind at two kilometres a second
-    const ep = W.bodyPos(W.earth, F.t), ev = W.bodyVel(W.earth, F.t);
     // nose straight up: rot(a)·(0,1) must equal the outward radial at θ
     v.angle = th - Math.PI / 2;
-    v.x = ep.x + Math.cos(th) * r;
-    v.y = ep.y + Math.sin(th) * r;
+    v.x = gx; v.y = gy;
     v.vx = ev.x; v.vy = ev.y; v.omega = 0;
     v.throttle = 1;
     v.sas = 'off';
     v.sasTarget = v.angle;
+    // where this craft departed from — so touching down somewhere is only
+    // "arriving at another city's pad" when that pad isn't the one it left
+    // (see checkGoals): sitting on the pad the instant it's spawned already
+    // satisfies v.landed, same as a genuine touchdown does, so without this a
+    // launch from anywhere but home credited itself the moment it appeared.
+    v.launchSiteId = site.id;
 
     v.mission = missionOverride || {
       id: 'm' + (missionSeq++), name: bp.name || 'Rocket',
@@ -777,12 +809,23 @@
     // weather you can put in the mission log: the inside of a thunderstorm
     if (b.atmo && v.altASL < 12000 && v.wx && v.wx.storm > 0.5) unlock('stormFly');
 
-    // landing at another city's launch complex opens it up as a launch site
+    // landing at another city's launch complex opens it up as a launch site.
+    //
+    // A freshly spawned craft already reads as v.landed — sitting at rest, in
+    // contact with the ground, is exactly what a genuine touchdown looks like
+    // too — so launching from anywhere but home used to credit that pad the
+    // instant the rocket appeared on it, before the player had done anything.
+    // What actually distinguishes the two is whether this is the pad it took
+    // off from: comparing against v.launchSiteId (stamped once, at spawn)
+    // means the site you're sitting at has to be a *different* one from the
+    // one you left, so landing back on your own departure pad — including
+    // the moment you appear on it — never counts, only arriving somewhere else.
     if (v.landed && b === W.earth) {
       const bp2 = W.bodyPos(b, F.t);
       const th2 = Math.atan2(v.y - bp2.y, v.x - bp2.x);
       const st = W.siteAt(b, th2);
-      if (st && Math.abs(U.wrap(th2 - st.theta)) * b.radius < 2500 && !F.progress['site:' + st.id]) {
+      if (st && st.id !== v.launchSiteId &&
+        Math.abs(U.wrap(th2 - st.theta)) * b.radius < 2500 && !F.progress['site:' + st.id]) {
         F.progress['site:' + st.id] = true;
         U.store.set('progress', F.progress);
         F.toast('Touched down at ' + st.padName, 'gold');
