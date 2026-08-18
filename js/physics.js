@@ -1,9 +1,10 @@
 /* ============================================================
    physics.js — one simulation step for every live vessel
    ------------------------------------------------------------
-   Forces: gravity (Earth + Moon), engine thrust with gimbal,
+   Forces: gravity (every world), engine thrust with gimbal,
            atmospheric drag + weathervaning, parachutes,
-           buoyancy + water drag, terrain contact, scenery smashing.
+           buoyancy + water drag, terrain contact, scenery smashing,
+           friction and solar heating.
    ============================================================ */
 (function (S) {
   'use strict';
@@ -39,6 +40,11 @@
   const HEAT_K = 3.4e-10;
   const HEAT_COOL = 0.08;      // per second, proportional to the heat held
   const HEAT_SHADOW = 0.18;    // share taken by a part tucked behind another
+  // Sunlight, through the same accumulator: it falls off as 1/r², and the
+  // constant is set so that out at Earth's orbit it settles a hull at a
+  // harmless 2%, half that distance is uncomfortable, a tenth of it cooks
+  // anything unshielded, and skimming the surface is measured in seconds.
+  const SUN_HEAT = 1.64e14;
 
   const _g = { x: 0, y: 0 };
   const _wp = { x: 0, y: 0 };
@@ -73,12 +79,15 @@
   const SCEN_DENSITY = { pine: 22, tree: 22, house: 120, block: 210, mast: 70, rock: 300, boulder: 280, flag: 8 };
   function scenMass(o) { return o.w * o.h * (SCEN_DENSITY[o.type] || 60); }
 
-  /** body whose surface we are closest to */
+  /** body whose surface we are closest to. Compares against the sphere rather
+      than the true terrain — a few km of hills never decides which *world* is
+      nearest, and this runs for every craft every step */
   function nearestBody(x, y, t) {
     let best = null, bestAlt = Infinity;
     for (const b of W.bodies) {
-      const gi = W.groundInfo(b, x, y, t);
-      if (gi.alt < bestAlt) { bestAlt = gi.alt; best = b; }
+      const bp = W.bodyPos(b, t);
+      const alt = Math.hypot(x - bp.x, y - bp.y) - b.radius;
+      if (alt < bestAlt) { bestAlt = alt; best = b; }
     }
     return best;
   }
@@ -219,12 +228,17 @@
     const ref = W.soiBody(v.x, v.y, t);         // whose gravity we are orbiting
     const gi = W.groundInfo(near, v.x, v.y, t);      // used by the ground-contact
     // section below too — nothing moves between here and there, so one query does
-    const altASL = W.altitudeASL(W.earth, v.x, v.y, t);
-    const rho = W.density(W.earth, altASL);
-    const atmoF = rho / W.earth.atmo.rho0;
+    // air belongs to whichever world we are over, not to Earth — Ares has its
+    // own (very thin) sky, and the Moon and Kore have none at all
+    const altASL = W.altitudeASL(near, v.x, v.y, t);
+    const rho = W.density(near, altASL);
+    const atmoF = near.atmo ? rho / near.atmo.rho0 : 0;
 
     const nose = v.noseDir();
-    const speed = Math.hypot(v.vx, v.vy);
+    // velocity through the air, which travels with the world it belongs to
+    const airV = W.bodyVel(near, t);
+    const avx = v.vx - airV.x, avy = v.vy - airV.y;
+    const airSpd = Math.hypot(avx, avy);
 
     /* ── attitude command ── */
     let cmd = 0;
@@ -304,10 +318,14 @@
     }
     v.liveThrust = liveThrust;
 
-    /* ── atmosphere ── */
-    if (rho > 1e-7 && speed > 0.05) {
-      const vAx = v.vx * nose.x + v.vy * nose.y;
-      const q = 0.5 * rho * speed * speed;
+    /* ── atmosphere ──
+       Air belongs to its world and travels with it. That was invisible while
+       Earth sat still at the origin; now that it laps the Sun at two
+       kilometres a second, using the raw world velocity here would put a
+       rocket standing on the pad into a permanent hurricane. */
+    if (rho > 1e-7 && airSpd > 0.05) {
+      const vAx = avx * nose.x + avy * nose.y;
+      const q = 0.5 * rho * airSpd * airSpd;
 
       // axial drag, straight through the centre of mass
       const cdAx = vAx > 0 ? A.cdFwd : A.cdBack;
@@ -315,7 +333,7 @@
       Fx -= nose.x * fAx; Fy -= nose.y * fAx;
 
       // cross-flow drag part by part — this is what makes fins work
-      const lvx = v.vx - nose.x * vAx, lvy = v.vy - nose.y * vAx;
+      const lvx = avx - nose.x * vAx, lvy = avy - nose.y * vAx;
       const lSpd = Math.hypot(lvx, lvy);
       if (lSpd > 0.05) {
         const k = 0.5 * rho * lSpd * DRAG_K;
@@ -329,7 +347,7 @@
       }
       // rotational damping from cross-flow — kept light so the craft stays
       // steerable at max q; the per-part cross-flow above still weathervanes it
-      Tq -= 0.5 * rho * speed * v.omega * A.damp * DRAG_K * 0.3;
+      Tq -= 0.5 * rho * airSpd * v.omega * A.damp * DRAG_K * 0.3;
 
       // parachutes
       for (const p of A.chutes) {
@@ -345,8 +363,8 @@
         }
         if (p.chute > 0.001) {
           const cA = p.def.chute.area * p.chute * p.chute;
-          const f = 0.5 * rho * speed * p.def.chute.cd * cA;
-          const fx = -v.vx * f, fy = -v.vy * f;
+          const f = 0.5 * rho * airSpd * p.def.chute.cd * cA;
+          const fx = -avx * f, fy = -avy * f;
           v.worldOf(p, _wp);
           // riser sits above the canister, so pull from there
           _wp.x += nose.x * p.def.chute.riser * p.chute;
@@ -399,8 +417,8 @@
     v.altASL = altASL;
     v.atmoF = atmoF;
 
-    /* ── friction heating (can burn parts clean off) ── */
-    applyHeat(v, rho, speed, dt);
+    /* ── friction and solar heating (either can burn parts clean off) ── */
+    applyHeat(v, rho, avx, avy, dt, t);
   }
 
   /* ═══════════════════ re-entry heating ═══════════════════ */
@@ -412,35 +430,25 @@
    * a part past its tolerance and it burns away — and if that was the last
    * command pod, the craft is lost with it.
    */
-  function applyHeat(v, rho, speed, dt) {
+  function applyHeat(v, rho, avx, avy, dt, t) {
     const ps = v.parts;
+    // speed *through the air*, not across the solar system
+    const speed = Math.hypot(avx, avy);
     const flux = (rho > 1e-7 && speed > 40) ? rho * speed * speed * speed * HEAT_K : 0;
 
-    if (flux > 0) {
-      // the direction the air arrives from, in the craft's own axes
-      const ca = Math.cos(v.angle), sa = Math.sin(v.angle);
-      const sp = Math.hypot(v.vx, v.vy) || 1;
-      const ux = (v.vx * ca + v.vy * sa) / sp;
-      const uy = (-v.vx * sa + v.vy * ca) / sp;
-      const px = -uy, py = ux;                     // across the flow
-      for (const p of ps) {
-        const ax = p.lx - v.com.x, ay = p.ly - v.com.y;
-        p._hs = ax * ux + ay * uy;                 // how far upstream it sits
-        p._hq = ax * px + ay * py;                 // offset across the flow
-        // exact half-extent of an axis-aligned box measured across the flow
-        p._hx = 0.5 * (p.def.w * Math.abs(px) + p.def.h * Math.abs(py));
-      }
-      for (const p of ps) {
-        let shade = 1, prot = 0;
-        for (const o of ps) {
-          if (o === p || o._hs <= p._hs + 0.05) continue;             // not in front
-          if (Math.abs(o._hq - p._hq) > o._hx + p._hx) continue;      // not in the way
-          shade = HEAT_SHADOW;
-          if (o.def.shield) prot = Math.max(prot, o.def.shield.prot);
-        }
-        p.temp += flux * shade * (1 - prot) * dt;
-      }
-    }
+    // Sunlight, falling off as 1/r², poured into the very same accumulator —
+    // so a heat shield held between the craft and the Sun shades what's behind
+    // it exactly as it does on the way through an atmosphere.
+    const sp = W.bodyPos(W.sun, t == null ? W.t : t);
+    const sdx = sp.x - v.x, sdy = sp.y - v.y;
+    const sunFlux = SUN_HEAT / Math.max(1e6, sdx * sdx + sdy * sdy);
+
+    // heat arrives from where the air is coming from (that is, from where we
+    // are headed) and from wherever the Sun happens to be
+    if (flux > 0) heatFrom(ps, v.com, v.angle, flux, avx, avy, dt);
+    if (sunFlux > 2e-5) heatFrom(ps, v.com, v.angle, sunFlux, sdx, sdy, dt);
+    // remember which of the two is doing the damage, so the obituary is right
+    v.cookedBy = sunFlux > flux ? 'sun' : 'air';
 
     let worst = 0, hottest = 0, cooked = null;
     for (const p of ps) {
@@ -456,6 +464,37 @@
     if (cooked) for (const p of cooked) burnOff(v, p);
   }
 
+  /**
+   * Pour `flux` into every part, from the world direction (dx, dy). Parts
+   * facing the source take it all; anything tucked behind another takes a
+   * fraction, and anything behind a heat shield takes almost none.
+   */
+  function heatFrom(ps, com, angle, flux, dx, dy, dt) {
+    const len = Math.hypot(dx, dy) || 1;
+    const ca = Math.cos(angle), sa = Math.sin(angle);
+    // the source direction, in the craft's own axes
+    const ux = (dx * ca + dy * sa) / len;
+    const uy = (-dx * sa + dy * ca) / len;
+    const px = -uy, py = ux;                       // across it
+    for (const p of ps) {
+      const ax = p.lx - com.x, ay = p.ly - com.y;
+      p._hs = ax * ux + ay * uy;                   // how far toward the source it sits
+      p._hq = ax * px + ay * py;                   // offset across
+      // exact half-extent of an axis-aligned box measured across the flow
+      p._hx = 0.5 * (p.def.w * Math.abs(px) + p.def.h * Math.abs(py));
+    }
+    for (const p of ps) {
+      let shade = 1, prot = 0;
+      for (const o of ps) {
+        if (o === p || o._hs <= p._hs + 0.05) continue;             // not in front
+        if (Math.abs(o._hq - p._hq) > o._hx + p._hx) continue;      // not in the way
+        shade = HEAT_SHADOW;
+        if (o.def.shield) prot = Math.max(prot, o.def.shield.prot);
+      }
+      p.temp += flux * shade * (1 - prot) * dt;
+    }
+  }
+
   /** a part cooks off: it is gone, and losing the last pod takes the craft */
   function burnOff(v, p) {
     const podsLeft = v.parts.some(q => q !== p && q.def.type === 'pod');
@@ -468,7 +507,9 @@
     }
     if (S.audio) S.audio.boom(0.5);
     if (!v.parts.length || (p.def.type === 'pod' && !podsLeft)) {
-      v.crash = 'burned up in the atmosphere';
+      v.crash = v.cookedBy === 'sun'
+        ? 'was cooked to pieces by the Sun'
+        : 'burned up in the atmosphere';
     }
     v._dirty = true; v._aero = null; v._radius = null;
     v.updateMass();
@@ -478,6 +519,7 @@
 
   function waterForces(v, b, t, dt) {
     const bp = W.bodyPos(b, t);
+    const bv = W.bodyVel(b, t);       // the sea travels with its world, like the air
     let fx = 0, fy = 0, tq = 0, wet = 0, deepest = 0;
     for (const p of v.parts) {
       v.worldOf(p, _wp);
@@ -497,24 +539,26 @@
       const buoy = RHO_W * vol * gLoc * sub;
 
       v.velAt(_wp.x, _wp.y, _vp);
-      const sp = Math.hypot(_vp.x, _vp.y);
+      const wvx = _vp.x - bv.x, wvy = _vp.y - bv.y;      // speed through the water
+      const sp = Math.hypot(wvx, wvy);
       const dragK = 0.5 * RHO_W * 0.55 * (p.def.w * p.def.h * 0.5) * sub * sp;
 
-      const pfx = nx * buoy - _vp.x * dragK;
-      const pfy = ny * buoy - _vp.y * dragK;
+      const pfx = nx * buoy - wvx * dragK;
+      const pfy = ny * buoy - wvy * dragK;
       fx += pfx; fy += pfy;
       tq += (_wp.x - v.x) * pfy - (_wp.y - v.y) * pfx;
     }
 
     if (wet) {
+      const relS = Math.hypot(v.vx - bv.x, v.vy - bv.y);
       // clamp so a fast belly-flop can't launch the integrator into orbit
       const mag = Math.hypot(fx, fy);
-      const lim = 0.45 * v.mass * Math.max(6, Math.hypot(v.vx, v.vy)) / dt;
+      const lim = 0.45 * v.mass * Math.max(6, relS) / dt;
       if (mag > lim) { const s = lim / mag; fx *= s; fy *= s; tq *= s; }
 
       if (!v.inWater) {
         v.inWater = true;
-        const sp = Math.hypot(v.vx, v.vy);
+        const sp = relS;
         if (S.fx) S.fx.splash(v.x, v.y, sp);
         if (sp > v.crashSpeed() + 12) v.crash = 'broke apart on impact with the water';
         else if (S.audio) S.audio.splash();
@@ -671,11 +715,14 @@
   function coastEnd(v, dt, t) {
     v.angle = U.wrap(v.angle + v.omega * dt);
     v.updateMass();
-    v.nearBody = nearestBody(v.x, v.y, t);
+    const near = nearestBody(v.x, v.y, t);
+    v.nearBody = near;
     v.refBody = W.soiBody(v.x, v.y, t);
-    v.altASL = W.altitudeASL(W.earth, v.x, v.y, t);
+    v.altASL = W.altitudeASL(near, v.x, v.y, t);
     v.atmoF = 0;
     v.liveThrust = 0;
+    // the Sun still bakes a craft that is coasting past it on rails
+    applyHeat(v, 0, 0, 0, dt, t);
   }
 
   /**

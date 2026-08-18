@@ -28,7 +28,9 @@
     // 1e-7 meant you could zoom out ~800× further than anything worth looking
     // at, and it then took dozens of wheel clicks to get back.
     minZoom: 8e-6, maxZoom: 14,
-    mapMin: 1.2e-5, mapMax: 0.02,
+    // the map has to be able to hold the whole system in view now, so it zooms
+    // out roughly an order of magnitude further than the Earth–Moon days needed
+    mapMin: 5e-7, mapMax: 0.02,
     mapDefault: 6.5e-5
   };
 
@@ -113,12 +115,16 @@
     return 0.5 * Math.hypot(cw, ch) / (cam.map ? cam.mapZoom : cam.zoom);
   };
 
+  // every wheel notch / pinch step is taken to this power, so a quarter of the
+  // zoom happens per input — fine control beats racing to the limits
+  const ZOOM_STEP = 0.25;
+
   R.zoomBy = function (f) {
     if (cam.map) {
       // the map spans planet-to-planet distances, so the same wheel/pinch
       // step that feels right up close made the map lurch — soften it here
       // rather than in every caller
-      const soft = Math.pow(f, 0.45);
+      const soft = Math.pow(f, 0.45 * ZOOM_STEP);
       // recover if it ever got stuck at zero or NaN, otherwise multiplying
       // by the wheel factor can never climb back out
       let z = cam.mapZoomT;
@@ -127,7 +133,7 @@
     } else {
       let z = cam.zoomT;
       if (!isFinite(z) || z <= 0) z = 4;
-      cam.zoomT = U.clamp(z * f, cam.minZoom, cam.maxZoom);
+      cam.zoomT = U.clamp(z * Math.pow(f, ZOOM_STEP), cam.minZoom, cam.maxZoom);
     }
   };
 
@@ -202,7 +208,7 @@
 
   /* ═══════════════════ sky ═══════════════════ */
 
-  function drawSky(ctx, cw, ch, dpr, atmoF) {
+  function drawSky(ctx, cw, ch, dpr, atmoF, body) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     if (atmoF <= 0.001) {
       ctx.fillStyle = '#05070f';
@@ -217,7 +223,7 @@
     // gradual fade instead of a bright sky that snaps to black near the top.
     // The horizon glow fades slowest, which is how a real high-altitude sky
     // looks — dark overhead, a bright band still hugging the limb.
-    const c = W.earth.col;
+    const c = (body || W.earth).col;
     const g = ctx.createLinearGradient(0, 0, 0, ch);
     g.addColorStop(0, U.mix('#05070f', c.skyHi, Math.pow(atmoF, 2.6)));
     g.addColorStop(0.62, U.mix('#05070f', c.sky, Math.pow(atmoF, 2.0)));
@@ -244,7 +250,9 @@
 
     // entirely off-screen — skip it (also keeps path coords sane when zoomed in)
     const outer = b.radius + (b.atmo ? b.atmo.height : 0) + 4000;
-    if (dc - outer > viewR * 1.7) return;
+    if (dc - outer > viewR * (b.star ? 6 : 1.7)) return;   // a star's glare reaches further
+
+    if (b.star) { drawStar(ctx, b, rx, ry, zoom, t); return; }
 
     // on-screen but sub-pixel: render as a lit dot instead
     if (b.radius * zoom < 2.2) { drawFarBody(ctx, b, rx, ry, zoom); return; }
@@ -256,6 +264,28 @@
     if (b.atmo) drawAtmosphere(ctx, b, rx, ry, zoom, viewR);
     if (orbK > 0.01) drawOrbital(ctx, b, rx, ry, zoom, orbK);
     if (orbK < 0.99) drawSurface(ctx, b, t, rx, ry, thC, halfAng, zoom, viewR, 1 - orbK);
+  }
+
+  /**
+   * The Sun: a white-hot disc with a corona that keeps bleeding outward well
+   * past the surface, so it still reads as a star when it is only a few pixels
+   * across and blinding when you are close enough to be in trouble.
+   */
+  function drawStar(ctx, b, rx, ry, zoom, t) {
+    const R0 = Math.max(b.radius, 2.5 / zoom);       // never smaller than a dot
+    const flare = R0 * (3.2 + 0.06 * Math.sin(t * 0.7));
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const g = ctx.createRadialGradient(rx, ry, R0 * 0.2, rx, ry, flare);
+    g.addColorStop(0, 'rgba(255,252,235,1)');
+    g.addColorStop(R0 / flare, 'rgba(255,214,120,.92)');
+    g.addColorStop(0.55, 'rgba(255,150,40,.20)');
+    g.addColorStop(1, 'rgba(255,110,20,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(rx, ry, flare, 0, U.TAU);
+    ctx.fill();
+    ctx.restore();
   }
 
   /** a distant world reduced to a lit dot */
@@ -285,7 +315,7 @@
     ctx.fillStyle = core;
     ctx.fill();
 
-    if (b.id === 'moon') drawCraters(ctx, b, rx, ry, Rr);
+    if (b.craters) drawCraters(ctx, b, rx, ry, Rr);
 
     // surface band: green where land pokes above sea level, blue where it doesn't
     // The band is widened at low zoom so it stays visible, but it must never
@@ -1098,23 +1128,50 @@
     setWorldTf(ctx, cw, ch, dpr, cam.mapZoom, 0);
     const z = cam.mapZoom;
 
-    // Moon's orbit
-    ctx.beginPath();
-    ctx.arc(-cam.x, -cam.y, W.moon.orbit.a, 0, U.TAU);
+    // every orbit, drawn round whatever it goes round — the planets about the
+    // Sun, the moons about their planets
     ctx.strokeStyle = 'rgba(120,150,200,.22)';
     ctx.lineWidth = 1 / z;
-    ctx.stroke();
+    for (const b of W.bodies) {
+      if (!b.orbit) continue;
+      const pp = W.bodyPos(b.parent, t);
+      if (b.orbit.a * z < 8) continue;                  // too small to bother with
+      ctx.beginPath();
+      ctx.arc(pp.x - cam.x, pp.y - cam.y, b.orbit.a, 0, U.TAU);
+      ctx.stroke();
+    }
 
     for (const b of W.bodies) {
       const bp = W.bodyPos(b, t);
       const rx = bp.x - cam.x, ry = bp.y - cam.y;
+      if (b.star) { drawStar(ctx, b, rx, ry, z, t); continue; }
       if (b.atmo) {
         ctx.beginPath();
         ctx.arc(rx, ry, b.radius + b.atmo.height, 0, U.TAU);
         ctx.fillStyle = 'rgba(80,150,225,.16)';
         ctx.fill();
       }
-      drawOrbital(ctx, b, rx, ry, z, 1);
+      // zoomed out to see the whole system a planet is a fraction of a pixel
+      // across, so give it a floor size — and a name, since at that scale one
+      // dot looks much like another
+      if (b.radius * z < 3) {
+        ctx.beginPath();
+        ctx.arc(rx, ry, 3.5 / z, 0, U.TAU);
+        ctx.fillStyle = b.col.core;
+        ctx.fill();
+      } else {
+        drawOrbital(ctx, b, rx, ry, z, 1);
+      }
+      if (b.orbit && b.orbit.a * z > 40) {
+        ctx.save();
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.font = '11px system-ui, sans-serif';
+        ctx.fillStyle = 'rgba(190,205,230,.75)';
+        ctx.textAlign = 'center';
+        ctx.fillText(b.name, rx * z + cw / 2, -ry * z + ch / 2 - Math.max(6, b.radius * z) - 5);
+        ctx.restore();
+        setWorldTf(ctx, cw, ch, dpr, z, 0);
+      }
       if (b.soi) {
         ctx.beginPath();
         ctx.arc(rx, ry, b.soi, 0, U.TAU);
@@ -1367,9 +1424,12 @@
 
     const t = G.t;
     const v = G.focus;
-    const atmoF = v ? W.atmoFrac(W.earth, v.altASL == null ? 1e9 : v.altASL) : 0;
+    // the sky belongs to whatever world we are over — Earth's blue, Ares'
+    // thin rust-coloured haze, or nothing at all above an airless rock
+    const skyBody = (v && v.nearBody) || W.earth;
+    const atmoF = v ? W.atmoFrac(skyBody, v.altASL == null ? 1e9 : v.altASL) : 0;
 
-    drawSky(ctx, cw, ch, dpr, atmoF);
+    drawSky(ctx, cw, ch, dpr, atmoF, skyBody);
     // stars come out to match the darkening sky above, rather than staying
     // hidden until the very top of the atmosphere
     drawStars(ctx, cw, ch, dpr, U.clamp(1 - Math.pow(atmoF, 1.7) * 1.25, 0, 1), t, cam.rot);

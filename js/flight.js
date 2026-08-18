@@ -53,7 +53,13 @@
     { id: 'moonOrbit', label: 'Orbit the Moon' },
     { id: 'moonLand', label: 'Land on the Moon' },
     { id: 'home', label: 'Return home safely' },
-    { id: 'demolition', label: 'Flatten 25 buildings' }
+    { id: 'demolition', label: 'Flatten 25 buildings' },
+    { id: 'interplanetary', label: 'Escape into solar orbit' },
+    { id: 'aresSoi', label: 'Reach Ares' },
+    { id: 'aresOrbit', label: 'Orbit Ares' },
+    { id: 'aresLand', label: 'Land on Ares' },
+    { id: 'koreLand', label: 'Land on Kore' },
+    { id: 'sunDive', label: 'Skim the Sun and survive' }
   ];
   F.GOALS = GOALS;
   F.progress = U.store.get('progress', {});
@@ -109,7 +115,7 @@
     // if another craft is still sitting on the pad (e.g. launching a second
     // rocket before the first has lifted off), nudge this one along the pad
     // instead of spawning it stacked directly inside the other one
-    const pad = W.padPoint();
+    const pad = W.padPoint(F.t);
     const parked = F.vessels.filter(x => !x.dead && Math.hypot(x.x - pad.x, x.y - pad.y) < 400).length;
     const th = W.padTheta + (parked ? Math.ceil(parked / 2) * (parked % 2 ? 1 : -1) * 0.002 : 0);
 
@@ -118,11 +124,15 @@
     for (const p of v.parts) lo = Math.min(lo, p.ly - p.def.h / 2);
     const clearance = v.com.y - lo;
     const r = g + clearance + 0.06;
+    // Earth is going round the Sun, so the pad is a moving place: sit the
+    // craft at Earth's position plus the pad offset, and give it Earth's
+    // velocity or it would be left behind at two kilometres a second
+    const ep = W.bodyPos(W.earth, F.t), ev = W.bodyVel(W.earth, F.t);
     // nose straight up: rot(a)·(0,1) must equal the outward radial at θ
     v.angle = th - Math.PI / 2;
-    v.x = Math.cos(th) * r;
-    v.y = Math.sin(th) * r;
-    v.vx = 0; v.vy = 0; v.omega = 0;
+    v.x = ep.x + Math.cos(th) * r;
+    v.y = ep.y + Math.sin(th) * r;
+    v.vx = ev.x; v.vy = ev.y; v.omega = 0;
     v.throttle = 1;
     v.sas = 'off';
     v.sasTarget = v.angle;
@@ -397,17 +407,28 @@
   function maxWarpIdx() {
     const v = F.focus;
     if (!v) return 0;
-    const onRailsOk = v.altASL > 62000 && !v.landed && !v.touching && (v.liveThrust || 0) <= 0;
+    // clear of the air of whatever world we're over — measured against that
+    // world's own atmosphere, since Ares' is thin and the Moon has none
+    const near = v.nearBody || W.earth;
+    const clear = near.atmo ? near.atmo.height + 2000 : 5000;
+    const onRailsOk = v.altASL > clear && !v.landed && !v.touching && (v.liveThrust || 0) <= 0;
     if (!onRailsOk) return RAILS_FROM - 1;
     // Closing on another world, ease off. A substep at top warp covers more
     // ground than the Moon's whole sphere of influence is wide, so the craft
     // jumps clean over the arrival it spent a transfer aiming at — the pass
     // goes unsampled, the goal never fires, and the approach integrates badly
-    // just where it matters most.
+    // just where it matters most. The sphere we are already inside doesn't
+    // count, or sitting in low orbit would peg the warp for the whole flight.
+    const here = v.refBody || W.soiBody(v.x, v.y, F.t);
     for (const b of W.bodies) {
-      if (!b.soi) continue;
-      const bp = W.bodyPos(b, F.t);
-      if (Math.hypot(v.x - bp.x, v.y - bp.y) < b.soi * 3) return Math.min(WARPS.length - 1, 5);
+      if (!b.soi || b === here) continue;
+      const bp = W.bodyPos(b, F.t), bv = W.bodyVel(b, F.t);
+      const dx = v.x - bp.x, dy = v.y - bp.y;
+      if (dx * dx + dy * dy > (b.soi * 3) * (b.soi * 3)) continue;
+      // Only ease off for a world we are *closing on*. Pulling away from one
+      // is no risk at all, and clamping there made every departure crawl for
+      // as long as it took to coast clear of the planet just left behind.
+      if ((v.vx - bv.x) * dx + (v.vy - bv.y) * dy < 0) return Math.min(WARPS.length - 1, 5);
     }
     return WARPS.length - 1;
   }
@@ -567,9 +588,18 @@
         // and must be left alone until that window has actually gone by;
         // ageing those out too would keep sliding the countdown forward and it
         // would never reach zero.
+        const age = F.t - (p && p.madeAt != null ? p.madeAt : F.t);
+        const toNode = p ? p.tBurn - F.t : 0;
+        // A departure window days away is only worth what the craft's actual
+        // position makes it: warp there and a little integration drift moves
+        // the ejection point, which for an interplanetary shot is the whole
+        // ballgame. So a transfer plan is also refreshed while it waits — often
+        // enough to stay true, rarely enough not to cost anything, and never
+        // once the node is close (see the freeze below).
         const since = cheap
-          ? F.t - (p && p.madeAt != null ? p.madeAt : F.t)
-          : F.t - (p ? p.tBurn : 0);
+          ? age
+          : (toNode < -45 ? 1e9
+            : (toNode > 600 && age > Math.max(300, toNode * 0.1)) ? 1e9 : 0);
         // Hands off once the node is nearly here. Re-solving a capture in the
         // last few seconds can hand back a completely different burn — the
         // node it was aiming at slips behind the craft and the next one is an
@@ -580,7 +610,8 @@
         const imminent = node && p.tBurn - F.t < burnLead() + 25;
         if (!burn && !imminent && replanIn <= 0 && replanCool <= 0 && p && p.ok &&
           since > (cheap ? 8 : 45)) {
-          replanCool = cheap ? 1.5 : 6;          // real seconds
+          // real seconds, stretched when the planner is working hard
+          replanCool = U.clamp(planMs / 12, cheap ? 1.5 : 6, 25);
           F.replan();
         }
       }
@@ -664,7 +695,7 @@
     // per-vessel, not global — otherwise a fresh second rocket still sitting on
     // the pad (already "landed") would count as "come home" the instant any
     // *other* mission had ever reached space
-    if (v.altASL > 60000) { unlock('space'); v.reachedSpace = true; }
+    if (b === W.earth && v.altASL > 60000) { unlock('space'); v.reachedSpace = true; }
 
     // small notice on the way through the atmosphere's edge, in either direction
     if (b.atmo) {
@@ -680,15 +711,26 @@
 
     const soi = W.soiBody(v.x, v.y, F.t);
     if (soi === W.moon) unlock('moonSoi');
+    if (soi === W.ares) unlock('aresSoi');
+    if (soi === W.sun && v.reachedSpace) unlock('interplanetary');
+
+    // Close enough to the Sun to be in real trouble. Set at the range where an
+    // unshielded hull cooks in under a minute but a shield pointed sunward
+    // holds — so the badge means "went there and came back", not "went there".
+    const sp = W.bodyPos(W.sun, F.t);
+    if (Math.hypot(v.x - sp.x, v.y - sp.y) < W.sun.radius * 4.5) unlock('sunDive');
 
     const el = F.el;
     if (el && el.e < 1) {
       if (el.body === W.earth && el.pe > W.earth.radius + 60000) unlock('orbit');
       if (el.body === W.moon && el.pe > W.moon.radius + 3000 && !v.landed) unlock('moonOrbit');
+      if (el.body === W.ares && el.pe > W.ares.radius + 28000 && !v.landed) unlock('aresOrbit');
     }
 
     if (v.landed) {
       if (b === W.moon) unlock('moonLand');
+      if (b === W.ares) unlock('aresLand');
+      if (b === W.byId.kore) unlock('koreLand');
       if (b === W.earth && v.reachedSpace) {
         unlock('home');
         if (v.inWater) unlock('splash');
@@ -742,9 +784,9 @@
       if (b === F.focus) { F.toast("Can't target your own craft", 'bad'); return; }
       const d = Math.hypot(b.x - F.focus.x, b.y - F.focus.y);
       if (d < 5000) { F.toast('You are already at ' + F.targetName(b), 'bad'); return; }
-    } else if (!b.orbit) {
-      // the world everything else goes round: targeting it means "plan me into
-      // a low orbit around it", which is useful from anywhere but the pad
+    } else if (b === W.soiBody(F.focus.x, F.focus.y, F.t) || W.isAncestor(b, W.soiBody(F.focus.x, F.focus.y, F.t))) {
+      // a world we are already inside the sphere of: targeting it means "plan
+      // me into a low orbit round it", which works from anywhere but the pad
       if (F.focus.landed) { F.toast('Get off the ground first', 'bad'); return; }
     }
     F.target = b;
@@ -758,6 +800,18 @@
     return p;
   }
 
+  // How long the last plan took to work out, in milliseconds. A trim around
+  // Earth costs a few; a crossing between planets costs a hundred, because it
+  // has to fly the whole route to score it. Backing the refresh rate off in
+  // proportion keeps the expensive ones from stuttering the frame rate.
+  let planMs = 5;
+  function timedPlan(fn) {
+    const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
+    const p = fn();
+    if (t0) planMs = 0.7 * planMs + 0.3 * (performance.now() - t0);
+    return p;
+  }
+
   F.replan = function () {
     const v = F.focus;
     if (!F.target || !v || v.dead) { F.plan = null; F.paintXfer(); return; }
@@ -768,10 +822,25 @@
     // longer "get there" but "settle into a low orbit around it".
     if (!F.isVesselTarget(F.target)) {
       const b = F.target;
-      if (!b.orbit || W.soiBody(v.x, v.y, F.t) === b) {
-        F.plan = stamped(W.planCapture(v, b, F.t));
+      const here = W.soiBody(v.x, v.y, F.t);
+      // Already inside that world's sphere — either orbiting it, or orbiting
+      // something that orbits it (the Moon, from Earth's point of view). Either
+      // way the job is "settle into a low orbit round it", not "fly there".
+      if (b === here || W.isAncestor(b, here)) {
+        F.plan = stamped(timedPlan(() => W.planCapture(v, b, F.t)));
         F.paintXfer();
         return;
+      }
+    }
+
+    // Already climbing out of a planet's grip with another world targeted?
+    // Then the departure window is behind us and the useful answer is the trim
+    // that fixes where we come out — not a scolding about escape paths.
+    if (!F.isVesselTarget(F.target)) {
+      const elHere = W.elements(W.soiBody(v.x, v.y, F.t), v.x, v.y, v.vx, v.vy, F.t);
+      if (elHere.e >= 1) {
+        const c = timedPlan(() => W.planCorrection(v, F.target, F.t));
+        if (c && c.ok) { F.plan = stamped(c); F.paintXfer(); return; }
       }
     }
 
@@ -783,10 +852,10 @@
     // we arrive, not a brand-new departure window days from now.
     const ap = liveApproach();
     if (ap && ap.inSoi && !v.landed) {
-      const c = W.planCorrection(v, tg, F.t);
+      const c = timedPlan(() => W.planCorrection(v, tg, F.t));
       if (c) { F.plan = stamped(c); F.paintXfer(); return; }
     }
-    F.plan = stamped(W.planTransfer(v, tg, F.t));
+    F.plan = stamped(timedPlan(() => W.planTransfer(v, tg, F.t)));
     F.paintXfer();
   };
 
@@ -962,10 +1031,17 @@
     const secs = v ? burnSeconds(v, dvLeft) : null;
     const name = F.targetName(F.target);
 
-    // is the correction the planner found actually worth burning?
-    const worthIt = p.correction &&
-      Math.abs(p.nowPeriapsis - p.wantAlt) > Math.max(15000, Math.abs(p.wantAlt) * 0.5) &&
-      p.dv >= 0.5;
+    // Is the correction the planner found actually worth burning? It has to
+    // move the arrival somewhere better, by enough to matter — and if the path
+    // already reaches the target's sphere of influence, only a cheap trim is
+    // worth it out here: arriving and then burning at periapsis buys far more
+    // than the same fuel spent mid-crossing.
+    const gain = p.correction
+      ? Math.abs(p.nowPeriapsis - p.wantAlt) - Math.abs(p.periapsis - p.wantAlt) : 0;
+    const willArrive = !!(ap && ap.inSoi);
+    const worthIt = !!p.correction && p.dv >= 0.5 &&
+      gain > Math.max(15000, Math.abs(p.wantAlt)) &&
+      (!willArrive || p.dv < 60);
     const aim = p.retro ? 'Retrograde' : 'Prograde';
 
     let h = '';
@@ -1060,7 +1136,13 @@
     const soi = W.soiBody(v.x, v.y, F.t);
     F.el = W.elements(soi, v.x, v.y, v.vx, v.vy, F.t);
     if (v.landed) { F.path = null; return; }
-    F.path = W.predict(v.x, v.y, v.vx, v.vy, F.t, { maxSteps: 2000, watch: watchOf() });
+    // on an escape path there is no lap to close, so look further ahead with a
+    // longer stride — that's what lets the panel report a closest pass at a
+    // planet days away instead of trailing off in empty space
+    const esc = F.el && F.el.e >= 1;
+    F.path = W.predict(v.x, v.y, v.vx, v.vy, F.t, {
+      maxSteps: esc ? 3000 : 2000, dtCap: esc ? 5400 : 1200, watch: watchOf()
+    });
   };
 
   /** lighter-weight, throttled path prediction for every other vessel in the

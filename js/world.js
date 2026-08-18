@@ -2,7 +2,8 @@
    world.js — planets, terrain, oceans, scenery, clouds,
               atmosphere, orbital maths and trajectory prediction
    ------------------------------------------------------------
-   World space: metres, +x right, +y up, Earth centred on (0,0).
+   World space: metres, +x right, +y up, the Sun at (0,0);
+   planets orbit the Sun and moons orbit their planets.
    ============================================================ */
 (function (S) {
   'use strict';
@@ -10,7 +11,30 @@
   const U = S.util;
   const W = S.world = {};
 
-  /* ═══════════════════ bodies ═══════════════════ */
+  /* ═══════════════════ bodies ═══════════════════
+     A small solar system: the Sun at the origin, Earth and Ares going round
+     it, and a moon apiece. Distances and masses are picked so the trips are
+     recognisable but playable — a year lasts a week and a half, an Earth→Ares
+     window comes round every 24 days, and the crossing takes eight. */
+
+  const SUN = {
+    id: 'sun', name: 'the Sun', seed: 5,
+    star: true,
+    radius: 6.0e6,
+    mu: 1.30e15,
+    sea: false, atmo: null,
+    cont: [], detail: [], contOrigin: 0,       // a star has no landscape
+    pad: null, padClear: 0,
+    col: {
+      land: '#ffd27a', landLo: '#ff9d2e', deep: '#c25a05',
+      core: '#fff3c4', coreLo: '#ff8c1a',
+      rock: '#ffbe55', sand: '#fff0b8',
+      water: '#000', waterDeep: '#000', surf: '#000',
+      sky: '#ffcf7a', skyHi: '#ff9b2e', glow: '#ffe3a3'
+    },
+    scenery: null, clouds: null,
+    orbit: null
+  };
 
   const EARTH = {
     id: 'earth', name: 'Earth', seed: 1337,
@@ -34,7 +58,7 @@
     },
     scenery: { density: 0.85, chunkM: 240, slots: 5, kinds: 'earth' },
     clouds: { chunkM: 3000, density: 0.55, loAlt: 700, hiAlt: 9000 },
-    orbit: null
+    orbit: { parent: 'sun', a: 3.20e8, phase0: 0 }
   };
 
   const MOON = {
@@ -56,26 +80,85 @@
     },
     scenery: { density: 0.6, chunkM: 380, slots: 4, kinds: 'moon' },
     clouds: null,
+    craters: true,
     orbit: { parent: 'earth', a: 4.0e6, phase0: -0.6 }
   };
 
-  MOON.orbit.n = Math.sqrt(EARTH.mu / Math.pow(MOON.orbit.a, 3));   // rad/s
-  MOON.orbit.period = U.TAU / MOON.orbit.n;
-  MOON.soi = MOON.orbit.a * Math.pow(MOON.mu / EARTH.mu, 0.4);      // ≈ 805 km
+  /** the second planet: smaller, colder, rust-red, and with an atmosphere so
+      thin it will slow you a little but never land you */
+  const ARES = {
+    id: 'ares', name: 'Ares', seed: 4711,
+    radius: 170000,
+    mu: 1.07e11,                       // ≈3.7 m/s² at the surface
+    sea: false,
+    atmo: { height: 25000, rho0: 0.020, scaleH: 11000 },
+    cont: [[1400, 2, 2.2], [800, 3, 0.4], [430, 5, 2.9], [210, 7, 1.6]],
+    detail: [[260, 19, 0.8], [130, 43, 2.4], [70, 89, 1.2]],
+    contOrigin: 1.0,
+    pad: null, padClear: 0,
+    col: {
+      land: '#b4552c', landLo: '#8a3f20', deep: '#4a2314',
+      core: '#c06336', coreLo: '#5d2d18',
+      rock: '#8d6a52', sand: '#e0a870',
+      water: '#000', waterDeep: '#000', surf: '#000',
+      sky: '#d99a62', skyHi: '#8a4a28', glow: '#f0c090'
+    },
+    scenery: { density: 0.7, chunkM: 300, slots: 4, kinds: 'ares' },
+    clouds: null,
+    orbit: { parent: 'sun', a: 4.90e8, phase0: 2.4 }
+  };
 
-  W.bodies = [EARTH, MOON];
+  /** Ares' little captured rock — barely any gravity, easy to land on */
+  const KORE = {
+    id: 'kore', name: 'Kore', seed: 24601,
+    radius: 40000,
+    mu: 2.4e8,                         // ≈0.15 m/s² at the surface
+    sea: false, atmo: null,
+    cont: [[1100, 2, 1.4], [700, 3, 2.2], [400, 5, 0.7]],
+    detail: [[240, 11, 1.9], [140, 27, 0.6]],
+    contOrigin: 0.5,
+    pad: null, padClear: 0,
+    col: {
+      land: '#8d8478', landLo: '#5d564c', deep: '#332f29',
+      core: '#7c7468', coreLo: '#3a352e',
+      rock: '#6f685d', sand: '#a49a8a',
+      water: '#000', waterDeep: '#000', surf: '#000',
+      sky: '#000', skyHi: '#000', glow: '#9a9184'
+    },
+    scenery: { density: 0.55, chunkM: 260, slots: 3, kinds: 'moon' },
+    clouds: null,
+    craters: true,
+    orbit: { parent: 'ares', a: 1.20e6, phase0: 1.9 }
+  };
+
+  W.bodies = [SUN, EARTH, MOON, ARES, KORE];
+  W.sun = SUN;
   W.earth = EARTH;
   W.moon = MOON;
-  W.byId = { earth: EARTH, moon: MOON };
+  W.ares = ARES;
+  W.byId = { sun: SUN, earth: EARTH, moon: MOON, ares: ARES, kore: KORE };
   W.t = 0;
 
   W.bodies.forEach(b => {
     b.seaLevel = b.radius;
-    b.chunkAng = b.scenery.chunkM / b.radius;
+    if (b.scenery) b.chunkAng = b.scenery.chunkM / b.radius;
     if (b.clouds) b.cloudAng = b.clouds.chunkM / b.radius;
     b._sc = new Map();
     b._cl = new Map();
+    if (!b.orbit) return;
+    // orbital rate and sphere of influence, both from the parent it goes round
+    b.parent = W.byId[b.orbit.parent];
+    b.orbit.n = Math.sqrt(b.parent.mu / Math.pow(b.orbit.a, 3));
+    b.orbit.period = U.TAU / b.orbit.n;
+    b.soi = b.orbit.a * Math.pow(b.mu / b.parent.mu, 0.4);
   });
+
+  // moons first: a point inside a moon's sphere is inside its planet's too, so
+  // W.soiBody has to test the innermost claim before the outer one
+  const SOI_ORDER = W.bodies.filter(b => b.soi).sort((a, b) => a.soi - b.soi);
+
+  /** how far out the system goes — used to call a trajectory "escaped" */
+  W.systemR = ARES.orbit.a * 2.6;
 
   /** scenery the player has already flattened */
   W.wrecked = new Set();
@@ -83,16 +166,38 @@
 
   /* ═══════════════════ body motion ═══════════════════ */
 
+  /**
+   * Where a body is, in world (Sun-centred) coordinates. Moons ride on their
+   * planet, so this walks up the chain — and because gravity asks for the same
+   * body at the same instant over and over, each answer is memoised against
+   * the time it was worked out for.
+   *
+   * Treat the returned objects as read-only: they are the cache itself.
+   */
+  const ORIGIN = { x: 0, y: 0 };
+
   W.bodyPos = function (b, t) {
-    if (!b.orbit) return { x: 0, y: 0 };
+    if (!b.orbit) return ORIGIN;
+    if (b._pT === t) return b._pP;
     const a = b.orbit.phase0 + b.orbit.n * t;
-    return { x: b.orbit.a * Math.cos(a), y: b.orbit.a * Math.sin(a) };
+    const pp = W.bodyPos(b.parent, t);
+    const out = b._pP || (b._pP = { x: 0, y: 0 });
+    out.x = pp.x + b.orbit.a * Math.cos(a);
+    out.y = pp.y + b.orbit.a * Math.sin(a);
+    b._pT = t;
+    return out;
   };
 
   W.bodyVel = function (b, t) {
-    if (!b.orbit) return { x: 0, y: 0 };
+    if (!b.orbit) return ORIGIN;
+    if (b._vT === t) return b._vV;
     const a = b.orbit.phase0 + b.orbit.n * t, s = b.orbit.a * b.orbit.n;
-    return { x: -s * Math.sin(a), y: s * Math.cos(a) };
+    const pv = W.bodyVel(b.parent, t);
+    const out = b._vV || (b._vV = { x: 0, y: 0 });
+    out.x = pv.x - s * Math.sin(a);
+    out.y = pv.y + s * Math.cos(a);
+    b._vT = t;
+    return out;
   };
 
   /* ═══════════════════ terrain ═══════════════════ */
@@ -209,11 +314,22 @@
     return out;
   };
 
-  /** which body's sphere of influence a point sits in */
+  /** is `a` a world that `b` orbits, directly or further up the chain? */
+  W.isAncestor = function (a, b) {
+    for (let p = b && b.parent; p; p = p.parent) if (p === a) return true;
+    return false;
+  };
+
+  /** which body's sphere of influence a point sits in — innermost claim wins,
+      so a craft near Kore answers Kore rather than Ares or the Sun */
   W.soiBody = function (x, y, t) {
-    const mp = W.bodyPos(MOON, t);
-    const d = Math.hypot(x - mp.x, y - mp.y);
-    return d < MOON.soi ? MOON : EARTH;
+    for (let i = 0; i < SOI_ORDER.length; i++) {
+      const b = SOI_ORDER[i];
+      const bp = W.bodyPos(b, t);
+      const dx = x - bp.x, dy = y - bp.y;
+      if (dx * dx + dy * dy < b.soi * b.soi) return b;
+    }
+    return SUN;
   };
 
   /* ═══════════════════ orbital elements ═══════════════════ */
@@ -256,6 +372,7 @@
   W.predict = function (x, y, vx, vy, t0, opts) {
     opts = opts || {};
     const maxSteps = opts.maxSteps || 2400;
+    const dtCap = opts.dtCap || 1200;
     const ref = W.soiBody(x, y, t0);
     const refNow = W.bodyPos(ref, t0);
     const pts = [];
@@ -283,7 +400,7 @@
       const bp = W.bodyPos(b, t);
       const rr = Math.hypot(x - bp.x, y - bp.y);
       const Tc = U.TAU * Math.sqrt((rr * rr * rr) / b.mu);
-      const dt = U.clamp(Tc / 240, 0.4, 1200);
+      const dt = U.clamp(Tc / 240, 0.4, dtCap);
 
       // velocity Verlet
       const nx = x + vx * dt + 0.5 * ax * dt * dt;
@@ -322,13 +439,69 @@
       if (i > 40 && travelled > lastStep * 8 &&
         Math.hypot(x - sx, y - sy) < lastStep * 1.4) { closed = true; break; }
 
-      if (Math.hypot(x, y) > MOON.orbit.a * 14) { escape = true; break; }
+      if (Math.hypot(x, y) > W.systemR) { escape = true; break; }
     }
 
     return { pts, ref, refNow, hit, closed, escape, span: t - t0, closest };
   };
 
   /* ═══════════════════ transfer planning ═══════════════════ */
+
+  /**
+   * Coast a craft forward along its own closed orbit, analytically.
+   *
+   * Stepping there numerically is hopeless over long waits: a low orbit forces
+   * ten-second steps, so reaching a transfer window three weeks out would need
+   * a couple of hundred thousand of them. Solving Kepler's equation instead
+   * gets the same answer in a handful of iterations, and a parking orbit is
+   * near enough a two-body problem for the purpose.
+   *
+   * Returns null for anything not on a closed orbit — the caller falls back to
+   * integrating.
+   */
+  function keplerAt(b, x, y, vx, vy, t0, t1) {
+    const el = W.elements(b, x, y, vx, vy, t0);
+    if (!(el.e < 0.985) || !isFinite(el.a) || el.a <= 0) return null;
+
+    const mu = b.mu, e = el.e, a = el.a;
+    const s = el.h < 0 ? -1 : 1;                  // which way round it goes
+    const w = Math.atan2(el.ey, el.ex);           // direction of periapsis
+    const bp0 = W.bodyPos(b, t0);
+    const nu0 = s * U.wrap(Math.atan2(y - bp0.y, x - bp0.x) - w);   // true anomaly, made to increase
+    const hf = Math.sqrt((1 - e) / (1 + e));
+    let E = 2 * Math.atan(hf * Math.tan(nu0 / 2));
+    let M = E - e * Math.sin(E) + Math.sqrt(mu / (a * a * a)) * (t1 - t0);
+
+    // Newton on Kepler's equation — a handful of passes is plenty at these
+    // eccentricities, and the bisection guard keeps it honest if it isn't
+    M = M % U.TAU;
+    let Ei = M;
+    for (let i = 0; i < 24; i++) {
+      const f = Ei - e * Math.sin(Ei) - M;
+      const fp = 1 - e * Math.cos(Ei);
+      const step = f / (fp || 1);
+      Ei -= U.clamp(step, -0.7, 0.7);
+      if (Math.abs(step) < 1e-12) break;
+    }
+    // true anomaly in the direction of travel, then put back into world sense
+    const nuP = 2 * Math.atan2(Math.sqrt(1 + e) * Math.sin(Ei / 2),
+      Math.sqrt(1 - e) * Math.cos(Ei / 2));
+    const r1 = a * (1 - e * Math.cos(Ei));
+    const th = w + s * nuP;
+    const cx = Math.cos(th), sn = Math.sin(th);
+    const hMag = Math.sqrt(mu * a * (1 - e * e));
+    const vr = (mu / hMag) * e * Math.sin(nuP);     // outward, along r̂
+    const vt = hMag / r1;                           // along the way it is going
+    const bp1 = W.bodyPos(b, t1), bv1 = W.bodyVel(b, t1);
+    return {
+      x: bp1.x + cx * r1, y: bp1.y + sn * r1,
+      vx: bv1.x + vr * cx - vt * sn * s,
+      vy: bv1.y + vr * sn + vt * cx * s,
+      t: t1
+    };
+  }
+
+  W.keplerAt = keplerAt;      // exposed for the planners (and for testing it)
 
   /** Integrate a point mass forward by `span` seconds. */
   function propagate(x, y, vx, vy, t0, span) {
@@ -360,9 +533,20 @@
     return (target.isVessel && target.track) ? target.track.at(t) : W.bodyPos(target, t);
   }
 
-  /** Fly forward and record how close we get to `target`. */
-  function flyToward(x, y, vx, vy, t0, target, span, collect) {
+  /**
+   * Fly forward and record how close we get to `target`.
+   *
+   * `res` sets how finely to step: the default suits a hop to the Moon, while
+   * a crossing between planets covers a hundred times the distance and has to
+   * stride out or it runs out of step budget somewhere short of the target —
+   * which reads as "no route found" when the route was perfectly good.
+   */
+  function flyToward(x, y, vx, vy, t0, target, span, collect, res) {
     let t = t0, best = Infinity, bestT = t0, hit = false;
+    // a hop to the Moon and a crossing to another planet differ by a hundredfold
+    // in both distance and duration, so the stride scales with the span asked for
+    const div = (res && res.div) || (span > 2e5 ? 90 : 190);
+    const cap = (res && res.cap) || U.clamp(span / 500, 900, 7200);
     const g = { x: 0, y: 0 };
     W.gravity(x, y, t, g);
     let ax = g.x, ay = g.y;
@@ -370,7 +554,7 @@
     for (let i = 0; i < 2600 && t < t0 + span; i++) {
       const b = W.soiBody(x, y, t), bp = W.bodyPos(b, t);
       const rr = Math.hypot(x - bp.x, y - bp.y);
-      const dt = U.clamp(U.TAU * Math.sqrt((rr * rr * rr) / b.mu) / 190, 0.5, 900);
+      const dt = U.clamp(U.TAU * Math.sqrt((rr * rr * rr) / b.mu) / div, 0.5, cap);
       const nx = x + vx * dt + 0.5 * ax * dt * dt;
       const ny = y + vy * dt + 0.5 * ay * dt * dt;
       t += dt;
@@ -382,9 +566,9 @@
       const d = Math.hypot(x - tp.x, y - tp.y);
       if (d < best) { best = d; bestT = t; }
       if (d < target.radius) { hit = true; break; }
-      // fell back into the parent
-      const pr = Math.hypot(x, y);
-      if (pr < W.earth.radius) break;
+      // ran into whatever we were nearest on the way — no point flying on
+      const hb = W.soiBody(x, y, t), hp = W.bodyPos(hb, t);
+      if (Math.hypot(x - hp.x, y - hp.y) < hb.radius) break;
     }
     return { miss: best, tArrive: bestT, pts, hit };
   }
@@ -468,11 +652,22 @@
     } else if (soi === target) {
       return { ok: false, reason: 'You are already at ' + target.name + '.' };
     }
-    if (soi !== parent) return { ok: false, reason: 'Escape ' + soi.name + ' first.' };
+    // Sitting in orbit round a planet with another planet as the target: this
+    // is an interplanetary departure, and the world we're parked at is the one
+    // whose orbit we're really leaving from. Anything else — a craft round a
+    // moon aiming at another planet, say — still has to climb out first.
+    const dep = (soi !== parent && soi.orbit && soi.parent === parent) ? soi : null;
+    if (soi !== parent && !dep) return { ok: false, reason: 'Escape ' + soi.name + ' first.' };
 
-    const el = W.elements(parent, v.x, v.y, v.vx, v.vy, t);
-    if (el.e >= 1) return { ok: false, reason: 'You are already on an escape path. Circularise first.' };
-    if (el.pe < parent.radius + 20000) return { ok: false, reason: 'Get into a stable orbit first.' };
+    // the parking orbit (round the planet we're leaving) vs. the heliocentric
+    // one — for a plain Earth→Moon hop these are one and the same
+    const elPark = W.elements(dep || parent, v.x, v.y, v.vx, v.vy, t);
+    const el = dep ? W.elements(parent, dep.orbit.a, 0, 0, Math.sqrt(parent.mu / dep.orbit.a), t)
+      : W.elements(parent, v.x, v.y, v.vx, v.vy, t);
+    if (elPark.e >= 1) return { ok: false, reason: 'You are already on an escape path. Circularise first.' };
+    if (elPark.pe < (dep || parent).radius + (dep ? 5000 : 20000)) {
+      return { ok: false, reason: 'Get into a stable orbit first.' };
+    }
 
     const mu = parent.mu;
     // a vessel target has no closed-form orbit, so treat its current osculating
@@ -481,7 +676,7 @@
     const elT = target.isVessel
       ? W.elements(parent, target.x0, target.y0, target.vx0, target.vy0, t)
       : null;
-    const r1 = el.a, r2 = target.isVessel ? elT.a : target.orbit.a;
+    const r1 = dep ? dep.orbit.a : el.a, r2 = target.isVessel ? elT.a : target.orbit.a;
     const at = (r1 + r2) / 2;
     const tTrans = Math.PI * Math.sqrt((at * at * at) / mu);
     // signed mean motions: a craft going round the wrong way has a *negative*
@@ -489,7 +684,7 @@
     const nT = target.isVessel
       ? (elT.h < 0 ? -1 : 1) * Math.sqrt(mu / (r2 * r2 * r2))
       : target.orbit.n;
-    const nC = (el.h < 0 ? -1 : 1) * Math.sqrt(mu / (r1 * r1 * r1));
+    const nC = dep ? dep.orbit.n : (el.h < 0 ? -1 : 1) * Math.sqrt(mu / (r1 * r1 * r1));
     if (Math.abs(nC - nT) < 1e-12) return { ok: false, reason: 'No transfer window exists.' };
 
     // Where the target must sit, relative to us, at the moment we burn. The
@@ -505,7 +700,9 @@
     // wide of the intended pass.
     const pp = W.bodyPos(parent, t);
     const tp = target.isVessel ? { x: target.x0, y: target.y0 } : W.bodyPos(target, t);
-    const thC = Math.atan2(v.y - pp.y, v.x - pp.x);
+    const dp = dep ? W.bodyPos(dep, t) : null;
+    const thC = dep ? Math.atan2(dp.y - pp.y, dp.x - pp.x)
+      : Math.atan2(v.y - pp.y, v.x - pp.x);
     const thT = Math.atan2(tp.y - pp.y, tp.x - pp.x);
     const phiReq = U.wrap(Math.PI - nT * tTrans);
     const syn = U.TAU / Math.abs(nT - nC);
@@ -526,10 +723,22 @@
       return { ok: false, reason: 'Your orbit is almost identical to ' + target.name + "'s — natural drift would take days. Raise or lower your orbit a little, then recalculate." };
     }
 
-    const vNow = Math.sqrt(mu * (2 / el.r - 1 / el.a));
-    const dv0 = Math.sqrt(mu * (2 / el.r - 1 / at)) - vNow;
-    const period = el.period;
-    const span = tTrans * 2.2;
+    let dv0, vNow, period;
+    if (dep) {
+      // leaving a planet costs escape velocity *plus* whatever the heliocentric
+      // orbit has to change by — the two add in quadrature, which is why a
+      // departure burn from low orbit is so much cheaper than doing it later
+      const vInf = Math.abs(Math.sqrt(mu * (2 / r1 - 1 / at)) - Math.sqrt(mu / r1));
+      const rPark = elPark.r;
+      vNow = elPark.speed;
+      dv0 = Math.sqrt(2 * dep.mu / rPark + vInf * vInf) - vNow;
+      period = elPark.period;                  // the parking orbit sets the burn points
+    } else {
+      vNow = Math.sqrt(mu * (2 / el.r - 1 / el.a));
+      dv0 = Math.sqrt(mu * (2 / el.r - 1 / at)) - vNow;
+      period = el.period;
+    }
+    const span = tTrans * (dep ? 1.6 : 2.2);
 
     // Tuning for the coarse sweep below, decided here (before it runs) so the
     // vessel-target position track can be sized to actually cover it.
@@ -550,10 +759,10 @@
     // kick at periapsis buys far more apoapsis than the same kick higher up),
     // so the seed — which treats the orbit as a circle of radius `a` — is only
     // a rough guide, and a spread tuned for a circle misses the good burns.
-    const eccK = U.clamp(el.e / 0.1, 0, 1);
+    const eccK = U.clamp((dep ? elPark.e : el.e) / 0.1, 0, 1);
     const dvSpread0 = target.isVessel
       ? Math.max(dv0 * 0.18, vNow * 0.02, 2)
-      : dv0 * (0.18 + 0.42 * eccK);
+      : (dep ? dv0 * 0.35 : dv0 * (0.18 + 0.42 * eccK));
     // Near-resonant orbits (nC≈nT — a co-orbital rendezvous, the single most
     // common real vessel-target case) can genuinely need a wait spanning a
     // large slice of the synodic period before the phase lines up, since a
@@ -565,11 +774,14 @@
     // ...and, for the same reason, an eccentric orbit gets the whole lap in
     // play (half a period either way) instead of a third of it, with extra
     // grid points so widening the window doesn't just coarsen it.
+    // A departure also has to find the right *point in the parking orbit* to
+    // push from — the ejection asymptote has to end up pointing the way the
+    // planet is going — so it sweeps a whole lap either side of the window.
     const tSpread0 = target.isVessel
       ? Math.max(period * 0.35, Math.min(syn * 0.5, period * 8))
-      : period * (0.35 + 0.15 * eccK);
-    const nT0 = target.isVessel ? 21 : (11 + Math.round(6 * eccK));
-    const nD0 = target.isVessel ? 15 : (9 + Math.round(4 * eccK));
+      : (dep ? period * 0.5 : period * (0.35 + 0.15 * eccK));
+    const nT0 = target.isVessel ? 21 : (dep ? 15 : 11 + Math.round(6 * eccK));
+    const nD0 = target.isVessel ? 15 : (dep ? 13 : 9 + Math.round(4 * eccK));
 
     // Give a vessel target a propagated position track covering the whole
     // window search() might probe, so flyToward can just interpolate.
@@ -598,6 +810,8 @@
     // above the surface and let the search hit *that*. A rendezvous with
     // another craft still wants to get as close as it can.
     const wantMiss = target.isVessel ? 0 : target.radius * 1.28;
+    // interplanetary flights are long: step out, or the budget runs dry mid-crossing
+    const res = dep ? { div: 90, cap: 3600 } : null;
 
     // ── refine: propagate once per candidate burn time, then try burn sizes ──
     let best = null;
@@ -605,18 +819,27 @@
       for (let i = 0; i < nT_; i++) {
         const tB = centreT + tSpread * (nT_ === 1 ? 0 : (i / (nT_ - 1) - 0.5) * 2);
         if (tB < t) continue;
-        const st = propagate(v.x, v.y, v.vx, v.vy, t, tB - t);
-        // prograde in the parent's frame, matching the autopilot
-        const pv = W.bodyVel(parent, st.t);
+        // Coast to the burn analytically. A transfer window can be weeks out,
+        // which is hundreds of thousands of integrator steps at low-orbit step
+        // sizes — Kepler's equation gets there in microseconds instead.
+        const st = keplerAt(soi, v.x, v.y, v.vx, v.vy, t, tB) ||
+          propagate(v.x, v.y, v.vx, v.vy, t, tB - t);
+        // prograde in the frame the autopilot uses — the planet we are parked
+        // at while departing, the Sun once we are out in open space
+        const pv = W.bodyVel(dep || parent, st.t);
         const sp = Math.hypot(st.vx - pv.x, st.vy - pv.y) || 1;
         const ux = (st.vx - pv.x) / sp, uy = (st.vy - pv.y) / sp;
         for (let k = 0; k < nD; k++) {
           const dv = dvCentre + dvSpread * (nD === 1 ? 0 : (k / (nD - 1) - 0.5) * 2);
           if (dv <= 0) continue;
-          const r = flyToward(st.x, st.y, st.vx + ux * dv, st.vy + uy * dv, tB, target, span, false);
-          const err = Math.abs(r.miss - wantMiss);
+          const r = flyToward(st.x, st.y, st.vx + ux * dv, st.vy + uy * dv, tB, target, span, false, res);
+          // among arrivals that are equally good, prefer the cheaper burn —
+          // otherwise the search happily picks a fast, expensive crossing over
+          // the leisurely one that costs 200 m/s less
+          const raw = Math.abs(r.miss - wantMiss);
+          const err = raw + (dep ? dv * 150 : 0);
           if (!best || err < best.err) {
-            best = { err, miss: r.miss, dv, tBurn: tB, tArrive: r.tArrive, hit: r.hit, st, ux, uy };
+            best = { err, raw, miss: r.miss, dv, tBurn: tB, tArrive: r.tArrive, hit: r.hit, st, ux, uy };
           }
         }
       }
@@ -628,11 +851,15 @@
     // keep whichever came out better, rather than handing back the bad one.
     // (Vessel targets sit this out: their sampled position track only covers
     // the first window, so probing past it would be measuring a frozen target.)
-    if (!target.isVessel && (!best || best.err > wantMiss * 0.4)) {
+    // judge the first window on the arrival alone — the Δv tiebreaker above is
+    // for ranking candidates, not for deciding whether the window was any good
+    const soiOk = best && !target.isVessel && best.miss < (target.soi || Infinity) * 0.6;
+    if (!target.isVessel && !(dep && soiOk) && (!best || best.raw > wantMiss * 0.4)) {
       const first = best;
       best = null;
       search(t + wait + syn, tSpread0, dv0, dvSpread0, nT0, nD0);
       if (first && (!best || first.err < best.err)) best = first;
+      if (!best) best = first;
     }
     if (best) search(best.tBurn, period * 0.07, best.dv, Math.max(best.dv * 0.05, dvSpread0 * 0.1), 7, 7);
     if (best) search(best.tBurn, period * 0.015, best.dv, Math.max(best.dv * 0.012, dvSpread0 * 0.02), 5, 5);
@@ -641,7 +868,7 @@
     // final pass, keeping the path for the map
     const shot = flyToward(best.st.x, best.st.y,
       best.st.vx + best.ux * best.dv, best.st.vy + best.uy * best.dv,
-      best.tBurn, target, span, true);
+      best.tBurn, target, span, true, res);
 
     return {
       ok: true, target, parent,
@@ -678,8 +905,16 @@
     // look ahead one full lap of whatever path the craft is on now — the pass
     // we are trying to move has to happen inside that
     const elNow = W.elements(W.soiBody(v.x, v.y, t), v.x, v.y, v.vx, v.vy, t);
-    const span = U.clamp(isFinite(elNow.period) ? elNow.period * 1.1 : 12 * 3600,
+    let span = U.clamp(isFinite(elNow.period) ? elNow.period * 1.1 : 12 * 3600,
       3 * 3600, 3 * 24 * 3600);
+    // aiming at another planet? then look ahead far enough to actually get
+    // there — roughly a Hohmann crossing from wherever we are now
+    if (!target.isVessel && target.orbit && target.parent) {
+      const pp = W.bodyPos(target.parent, t);
+      const rHere = Math.max(1, Math.hypot(v.x - pp.x, v.y - pp.y));
+      const at = (rHere + target.orbit.a) / 2;
+      span = Math.max(span, Math.PI * Math.sqrt((at * at * at) / target.parent.mu) * 1.4);
+    }
 
     if (target.isVessel && !target.track) {
       target.track = sampleTrack(target.x0, target.y0, target.vx0, target.vy0, t, span, 900);
@@ -705,7 +940,7 @@
     // Scale the net to the speeds involved. A trim on a coast needs a few m/s,
     // but dropping out of a lunar orbit onto an Earth-bound path needs a good
     // fraction of orbital speed, and a fixed ±70 m/s sweep can't see that far.
-    const reach = U.clamp(sp * 0.5, 70, 1200);
+    const reach = U.clamp(sp * 0.9, 70, 3000);
     sweep(0, reach, 33);
     if (best) sweep(best.dv, reach * 0.1, 11);
     if (best) sweep(best.dv, reach * 0.012, 9);
@@ -758,7 +993,7 @@
 
       // steps shrink as the craft dives in, so the crossing is pinned down
       // finely exactly where it matters
-      const dt = U.clamp(U.TAU * Math.sqrt((r * r * r) / b.mu) / 220, 0.5, 600);
+      const dt = U.clamp(U.TAU * Math.sqrt((r * r * r) / b.mu) / 220, 0.5, Math.max(600, span / 400));
       const nx = x + vx * dt + 0.5 * ax * dt * dt;
       const ny = y + vy * dt + 0.5 * ay * dt * dt;
       t += dt;
@@ -842,6 +1077,12 @@
       { t: 'rock', wgt: 62, w: [3, 9], h: [2, 6] },
       { t: 'boulder', wgt: 33, w: [10, 18], h: [7, 13] },
       { t: 'flag', wgt: 5, w: [2, 3], h: [5, 7] }
+    ],
+    // a wind-scoured desert: scattered stones and the odd big weathered block
+    ares: [
+      { t: 'rock', wgt: 58, w: [4, 11], h: [2, 7] },
+      { t: 'boulder', wgt: 38, w: [12, 24], h: [8, 17] },
+      { t: 'flag', wgt: 4, w: [2, 3], h: [5, 7] }
     ]
   };
 
@@ -967,10 +1208,14 @@
 
   W.padTheta = EARTH.pad.theta;
   W.padGround = terrain(EARTH, EARTH.pad.theta);
-  W.padPoint = function () {
+
+  /** the pad in world coordinates — Earth is going round the Sun now, so this
+      moves with it (and so does everything sitting on it) */
+  W.padPoint = function (t) {
+    const bp = W.bodyPos(EARTH, t == null ? W.t : t);
     return {
-      x: W.padGround * Math.cos(W.padTheta),
-      y: W.padGround * Math.sin(W.padTheta)
+      x: bp.x + W.padGround * Math.cos(W.padTheta),
+      y: bp.y + W.padGround * Math.sin(W.padTheta)
     };
   };
 
