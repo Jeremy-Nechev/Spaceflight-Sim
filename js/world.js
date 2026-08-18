@@ -58,6 +58,20 @@
     },
     scenery: { density: 0.85, chunkM: 240, slots: 5, kinds: 'earth' },
     clouds: { chunkM: 3000, density: 0.55, loAlt: 700, hiAlt: 9000 },
+    // one turn every two hours: long enough that a launch happens at a time of
+    // day, short enough that five orbits fit in a day like they do at home
+    // phase set so a brand-new game starts at nine in the morning on the pad
+    spin: { day: 7200, phase0: -2.356 },
+    biomes: true,
+    // Somewhere to fly *to*. Each is a real launch complex on the ground; only
+    // the home pad starts unlocked, the rest have to be landed at first.
+    // `smog` is how badly the city's air sits in its own basin.
+    siteSpec: [
+      { id: 'home', name: 'Meridian', pad: 'Meridian Launch Complex', want: Math.PI / 2, smog: 0.30, home: true },
+      { id: 'kestrel', name: 'Kestrel Bay', pad: 'Kestrel Bay Spaceport', want: Math.PI / 2 + 1.55, smog: 0.18 },
+      { id: 'solano', name: 'Solano Flats', pad: 'Solano Flats Pad', want: Math.PI / 2 + 3.05, smog: 0.55 },
+      { id: 'northgate', name: 'Northgate', pad: 'Northgate Pad', want: Math.PI / 2 - 1.45, smog: 0.45 }
+    ],
     orbit: { parent: 'sun', a: 3.20e8, phase0: 0 }
   };
 
@@ -81,6 +95,7 @@
     scenery: { density: 0.6, chunkM: 380, slots: 4, kinds: 'moon' },
     clouds: null,
     craters: true,
+    spin: { day: 54000, phase0: 0.4 },
     orbit: { parent: 'earth', a: 4.0e6, phase0: -0.6 }
   };
 
@@ -105,6 +120,7 @@
     },
     scenery: { density: 0.7, chunkM: 300, slots: 4, kinds: 'mars' },
     clouds: null,
+    spin: { day: 7600, phase0: 2.7 },
     orbit: { parent: 'sun', a: 4.90e8, phase0: 2.4 }
   };
 
@@ -128,6 +144,7 @@
     scenery: { density: 0.55, chunkM: 260, slots: 3, kinds: 'moon' },
     clouds: null,
     craters: true,
+    spin: { day: 21000, phase0: 1.2 },
     orbit: { parent: 'mars', a: 1.20e6, phase0: 1.9 }
   };
 
@@ -145,6 +162,7 @@
     if (b.clouds) b.cloudAng = b.clouds.chunkM / b.radius;
     b._sc = new Map();
     b._cl = new Map();
+    b._wxC = new Map();
     if (!b.orbit) return;
     // orbital rate and sphere of influence, both from the parent it goes round
     b.parent = W.byId[b.orbit.parent];
@@ -238,13 +256,16 @@
   const terrain = W.terrain = function (b, th, dth) {
     const lim = dth > 0 ? Math.PI / (dth * 3) : 0;
     let h = b.radius + continents(b, th) + detailOf(b, th, lim);
-    if (b.pad) {
-      // blend to a dead-flat plateau at the launch site
-      const d = U.wrap(th - b.pad.theta) / b.pad.width;
-      const wgt = Math.exp(-d * d);
-      if (wgt > 1e-4) {
-        const flat = b.radius + continents(b, b.pad.theta);
-        h = h + (flat - h) * wgt;
+    // blend to a dead-flat plateau under every launch complex. `flat` is
+    // precomputed per site (see resolveSites) — this runs on every physics
+    // step and every terrain sample the renderer takes.
+    const sites = b.sites;
+    if (sites) {
+      for (let i = 0; i < sites.length; i++) {
+        const st = sites[i];
+        const d = U.wrap(th - st.theta) / st.width;
+        if (d > 3 || d < -3) continue;                  // outside the blend
+        h += (st.flat - h) * Math.exp(-d * d);
       }
     }
     return h;
@@ -291,6 +312,261 @@
   W.atmoFrac = function (b, altASL) {
     if (!b.atmo) return 0;
     return U.clamp(1 - altASL / b.atmo.height, 0, 1);
+  };
+
+  /* ═══════════════════ time of day ═══════════════════
+     The ground is fixed in world coordinates — the pad, the collision tests,
+     every trajectory that ends at a landing site depends on that — so a day
+     is modelled as the sunlight sweeping round the globe rather than the globe
+     turning under it. Everything a player can see is the same either way: each
+     longitude gets its own dawn, noon, dusk and midnight, in that order, once
+     every `spin.day`. */
+
+  /** world angle the sunlight falls from, on body `b` at time `t` */
+  W.sunAngle = function (b, t) {
+    if (b.star) return 0;
+    const bp = W.bodyPos(b, t == null ? W.t : t);
+    const toSun = Math.atan2(-bp.y, -bp.x);
+    if (!b.spin) return toSun;
+    return toSun + U.TAU * ((t == null ? W.t : t) / b.spin.day) + b.spin.phase0;
+  };
+
+  /** cosine of the sun's height over a place: 1 overhead, 0 on the horizon, −1 midnight */
+  W.sunHeight = function (b, th, t) { return Math.cos(U.wrap(th - W.sunAngle(b, t))); };
+
+  /** 0 night … 1 full day, with a twilight band a few minutes wide */
+  W.daylight = function (b, th, t) {
+    return U.clamp((W.sunHeight(b, th, t) + 0.10) / 0.26, 0, 1);
+  };
+
+  /** local solar time in hours, 0..24 — noon is the sun overhead */
+  W.localHours = function (b, th, t) {
+    const h = U.wrap(th - W.sunAngle(b, t));
+    return (24 + 12 - (h * 12) / Math.PI) % 24;
+  };
+
+  /** local solar time as hh:mm */
+  W.clockAt = function (b, th, t) {
+    const hrs = W.localHours(b, th, t);
+    const hh = Math.floor(hrs), mm = Math.floor((hrs - hh) * 60);
+    return (hh < 10 ? '0' : '') + hh + ':' + (mm < 10 ? '0' : '') + mm;
+  };
+
+  /** which day of the mission it is where you are standing */
+  W.dayNumber = function (b, th, t) {
+    if (!b.spin) return 1;
+    return 1 + Math.floor(((t == null ? W.t : t) / b.spin.day) + 0.5);
+  };
+
+  /** a word for the time of day */
+  W.dayPart = function (b, th, t) {
+    const el = W.sunHeight(b, th, t), hrs = W.localHours(b, th, t);
+    if (el < -0.12) return 'night';
+    if (el < 0.03) return hrs < 12 ? 'dawn' : 'dusk';
+    if (hrs < 11) return 'morning';
+    if (hrs < 14) return 'midday';
+    return 'afternoon';
+  };
+
+  /* ═══════════════════ biomes ═══════════════════
+     Which sort of country sits at a given longitude. Purely a function of
+     angle, so it is the same every time you fly over it. */
+
+  const BIOME = {
+    ocean: { label: 'ocean', moisture: 1.00, temp: 15, swing: 4, scen: null, density: 0 },
+    beach: { label: 'coast', moisture: 0.80, temp: 20, swing: 8, scen: 'beach', density: 0.5 },
+    desert: { label: 'desert', moisture: 0.08, temp: 34, swing: 21, scen: 'desert', density: 0.45 },
+    plains: { label: 'plains', moisture: 0.52, temp: 19, swing: 12, scen: 'plains', density: 0.7 },
+    forest: { label: 'forest', moisture: 0.88, temp: 15, swing: 9, scen: 'forest', density: 1.15 },
+    mountain: { label: 'mountains', moisture: 0.70, temp: 7, swing: 11, scen: 'mountain', density: 0.5 },
+    city: { label: 'city', moisture: 0.62, temp: 22, swing: 8, scen: 'city', density: 1.25 }
+  };
+  W.BIOME = BIOME;
+
+  /** slow, seamless variation round the globe (integer harmonics ⇒ it wraps) */
+  function biomeNoise(b, th) {
+    const o = th - b.contOrigin;
+    return 0.5 + 0.5 * (0.60 * Math.sin(2 * o + 0.7) +
+      0.28 * Math.sin(5 * o - 1.9) + 0.12 * Math.sin(11 * o + 2.6));
+  }
+
+  /**
+   * The biome at angle `th`. Pass `gr` (the terrain radius) when the caller
+   * already has it — drawing the surface asks for a biome at every sample
+   * point, and terrain() is the expensive half of the answer.
+   * Returns null on worlds that have no biomes (everywhere but Earth).
+   */
+  W.biome = function (b, th, gr) {
+    if (!b.biomes) return null;
+    if (gr == null) gr = terrain(b, th);
+    if (b.sea && gr < b.seaLevel) return 'ocean';
+    const st = W.siteAt(b, th);
+    if (st && Math.abs(U.wrap(th - st.theta)) < st.span) return 'city';
+    if (b.sea && gr < b.seaLevel + 70) return 'beach';
+    if (gr > b.seaLevel + 2150) return 'mountain';
+    const k = biomeNoise(b, th);
+    return k < 0.34 ? 'desert' : (k < 0.70 ? 'forest' : 'plains');
+  };
+
+  /** the launch site nearest this angle, if there is one anywhere near */
+  W.siteAt = function (b, th) {
+    const sites = b.sites;
+    if (!sites) return null;
+    let best = null, bd = Infinity;
+    for (let i = 0; i < sites.length; i++) {
+      const d = Math.abs(U.wrap(th - sites[i].theta));
+      if (d < bd) { bd = d; best = sites[i]; }
+    }
+    return bd < 0.09 ? best : null;
+  };
+
+  W.site = function (id) {
+    const sites = EARTH.sites;
+    for (let i = 0; i < sites.length; i++) if (sites[i].id === id) return sites[i];
+    return sites[0];
+  };
+
+  /* ═══════════════════ weather ═══════════════════
+     Weather fronts drift round the planet and evolve as they go. Everything is
+     built from a handful of integer harmonics in longitude, each turning at
+     its own rate, so the field is smooth, seamless, and repeatable from the
+     clock alone — no state to save, and a forecast is just the same call with
+     a later `t`. */
+
+  const WX_HARM = [
+    [2, 5.5e-4, 1.00], [3, -8.2e-4, 0.70], [5, 3.6e-4, 0.46],
+    [8, -1.4e-3, 0.26], [13, 9.0e-4, 0.15]
+  ];
+
+  function wfield(b, th, t, k) {
+    const o = th - b.contOrigin;
+    let sum = 0, tot = 0;
+    for (let i = 0; i < WX_HARM.length; i++) {
+      const h = WX_HARM[i];
+      sum += h[2] * Math.sin(h[0] * o + h[1] * t * (1 + 0.13 * k) + k * 2.3994 + b.seed * 0.017);
+      tot += h[2];
+    }
+    return 0.5 + 0.5 * (sum / tot);
+  }
+
+  /** ground temperature in °C — biome, height, time of day and the odd cold snap */
+  W.surfaceTemp = function (b, th, t, bio, gr) {
+    if (!b.atmo) return -140;
+    bio = bio || W.biome(b, th, gr) || 'plains';
+    const inf = BIOME[bio] || BIOME.plains;
+    if (gr == null) gr = terrain(b, th);
+    const alt = Math.max(0, gr - b.seaLevel);
+    const snap = (wfield(b, th, t, 4) - 0.5) * 24;      // cold fronts and warm spells
+    return inf.temp - alt / 152 + (W.daylight(b, th, t) - 0.45) * inf.swing + snap;
+  };
+
+  const CALM = {
+    cloud: 0, cover: 0, storm: 0, rain: 0, snow: 0, wind: 0, gust: 0, jet: 0,
+    smog: 0, temp: -140, biome: null, label: 'no atmosphere', clear: true
+  };
+  W.CALM = CALM;
+
+  /**
+   * Conditions over a place. Cached on a coarse grid (a few hundred metres of
+   * arc, a few seconds of clock) because the physics asks a hundred times a
+   * second and none of this changes that fast — gusts are added afterwards, in
+   * W.windAt, so they stay smooth in time.
+   */
+  W.weather = function (b, th, t) {
+    if (!b.atmo || !b.clouds) return CALM;
+    if (t == null) t = W.t;
+    const qi = Math.round(th / 0.0015), qt = Math.round(t / 3);
+    const key = qt * 16384 + (qi & 16383);
+    let wx = b._wxC.get(key);
+    if (wx && wx.qi === qi && wx.qt === qt) return wx;
+
+    const thq = qi * 0.0015, tq = qt * 3;
+    const gr = terrain(b, thq);
+    const bio = W.biome(b, thq, gr) || 'plains';
+    const inf = BIOME[bio] || BIOME.plains;
+
+    // damp country makes its own weather; deserts hardly ever cloud over
+    const wet = 0.30 + 0.70 * inf.moisture;
+    const cloud = U.clamp((wfield(b, thq, tq, 0) - 0.28) * 1.75 * wet, 0, 1);
+    const front = wfield(b, thq, tq, 1);
+    const storm = U.clamp((cloud - 0.56) / 0.30, 0, 1) * U.clamp((front - 0.46) / 0.30, 0, 1);
+    const temp = W.surfaceTemp(b, thq, tq, bio, gr);
+
+    // snow needs the cold as well as the cloud, which is why it is a rarity:
+    // high ground, the small hours, or a cold snap blowing through
+    const cold = U.clamp((1.5 - temp) / 3.5, 0, 1);
+    const snow = storm * cold;
+    const rain = storm - snow;
+
+    // signed so the wind swings round smoothly instead of flipping direction
+    const base = wfield(b, thq, tq, 2) * 2 - 1;
+    const wind = base * (3.5 + 11 * Math.abs(base)) + U.sign(base) * storm * 19;
+    const jet = (wfield(b, thq, tq, 5) * 2 - 1) * 52;
+
+    // smog pools over a city until the wind or the rain clears it out
+    const st = W.siteAt(b, thq);
+    const smog = (bio === 'city' && st)
+      ? U.clamp(st.smog * (1 - Math.abs(wind) / 15) * (1 - rain * 1.4) *
+        (0.55 + 0.45 * W.daylight(b, thq, tq)), 0, 1)
+      : 0;
+
+    wx = {
+      qi, qt, biome: bio, cloud, cover: cloud, storm, rain, snow, temp,
+      wind, jet, gust: U.clamp(Math.abs(wind) / 26 + storm * 0.8, 0, 1.4), smog,
+      clear: cloud < 0.22 && storm < 0.02,
+      label: wxLabel(cloud, storm, rain, snow, Math.abs(wind), smog)
+    };
+    b._wxC.set(key, wx);
+    if (b._wxC.size > 600) b._wxC.clear();
+    return wx;
+  };
+
+  function wxLabel(cloud, storm, rain, snow, wind, smog) {
+    let s;
+    if (snow > 0.25) s = 'snow';
+    else if (rain > 0.45) s = 'thunderstorm';
+    else if (rain > 0.12) s = 'rain';
+    else if (snow > 0.05) s = 'flurries';
+    else if (cloud > 0.72) s = 'overcast';
+    else if (cloud > 0.40) s = 'cloudy';
+    else if (cloud > 0.16) s = 'fair';
+    else s = 'clear';
+    if (smog > 0.35 && rain < 0.1) s += ', smog';
+    if (wind > 22) s += ', gale';
+    else if (wind > 12) s += ', windy';
+    return s;
+  }
+
+  /**
+   * The wind at a point, as a world-frame velocity to be added to the air a
+   * craft is flying through. Tangential to the surface, with a jet stream a
+   * few kilometres up and gusts on top — and gusts blow across the vertical as
+   * well as along the ground, which is what tips a rocket off its heading.
+   */
+  const _wind = { x: 0, y: 0, speed: 0, cross: 0 };
+  W.windAt = function (b, th, altASL, t, out) {
+    out = out || _wind;
+    out.x = 0; out.y = 0; out.speed = 0; out.cross = 0;
+    if (!b.atmo || !b.clouds || altASL > b.atmo.height * 0.6) return out;
+    const wx = W.weather(b, th, t);
+
+    // friction holds the surface layer back; the jet stream lives at altitude
+    const surf = U.clamp(0.42 + Math.max(0, altASL) / 900, 0.42, 1);
+    const fade = U.clamp(1 - Math.max(0, altASL) / (b.atmo.height * 0.55), 0, 1);
+    const jz = (altASL - 9500) / 5400;
+    let s = wx.wind * surf * fade + wx.jet * Math.exp(-jz * jz) * fade;
+
+    // gusts: a couple of slow beats layered up, so it shoves rather than buzzes
+    const g = wx.gust * (7 * Math.sin(t * 0.37 + th * 900) + 4 * Math.sin(t * 1.13 + th * 2300));
+    s += g * fade;
+    const cross = wx.gust * fade * (2.6 * Math.sin(t * 0.61 + th * 1700) + 1.6 * Math.sin(t * 1.9 + th * 640));
+
+    const tx = -Math.sin(th), ty = Math.cos(th);
+    out.x = tx * s + Math.cos(th) * cross;
+    out.y = ty * s + Math.sin(th) * cross;
+    out.speed = s;
+    out.cross = cross;
+    return out;
   };
 
   /* ═══════════════════ gravity ═══════════════════ */
@@ -816,8 +1092,16 @@
     // ── refine: propagate once per candidate burn time, then try burn sizes ──
     let best = null;
     const search = (centreT, tSpread, dvCentre, dvSpread, nT_, nD) => {
+      // Keep the whole grid in the future by sliding it, not by dropping the
+      // samples that fall in the past. As a window closes in, half a centred
+      // grid is behind us, and skipping those points halves the resolution
+      // exactly when the plan matters most — a thin grid finds a worse burn,
+      // the window then looks bad, and the fallback below throws the player a
+      // synodic period into the future for no good reason.
+      let lo = centreT - tSpread, hi = centreT + tSpread;
+      if (lo < t + 1) { const sh = t + 1 - lo; lo += sh; hi += sh; }
       for (let i = 0; i < nT_; i++) {
-        const tB = centreT + tSpread * (nT_ === 1 ? 0 : (i / (nT_ - 1) - 0.5) * 2);
+        const tB = nT_ === 1 ? (lo + hi) * 0.5 : lo + ((hi - lo) * i) / (nT_ - 1);
         if (tB < t) continue;
         // Coast to the burn analytically. A transfer window can be weeks out,
         // which is hundreds of thousands of integrator steps at low-orbit step
@@ -845,20 +1129,41 @@
       }
     };
     search(t + wait, tSpread0, dv0, dvSpread0, nT0, nD0);
-    // A coarse grid can settle into a poor corner of one window — a grazing
-    // pass, or an arrival that only clips the edge of the sphere of influence.
-    // When it clearly has, spend the same effort on the next window round and
-    // keep whichever came out better, rather than handing back the bad one.
+
+    // Is what we have worth flying? Judged on the arrival alone — the Δv
+    // tiebreaker in the ranking is for choosing between candidates, not for
+    // deciding whether a window was any good. A departure that lands well
+    // inside the target's sphere of influence counts as good even if it isn't
+    // pretty: a small correction mid-cruise trims it the rest of the way.
+    const unhappy = () => {
+      const soiOk = best && !target.isVessel && best.miss < (target.soi || Infinity) * 0.6;
+      return !target.isVessel && !(dep && soiOk) && (!best || best.raw > wantMiss * 0.4);
+    };
+
+    // A coarse grid can land badly inside a perfectly good window: fifteen
+    // sample points around a parking lap either straddle the right ejection
+    // phase or they don't, and when they don't the answer comes out hundreds
+    // of times worse than the one six minutes either side of it. So before
+    // writing the window off, search *it* again at twice the resolution. This
+    // costs nothing in the common case (it only runs when the first pass came
+    // back poor) and it is what stops the plan flip-flopping between this
+    // window and the next one every time the player recalculates.
+    if (unhappy()) search(t + wait, tSpread0, dv0, dvSpread0, nT0 * 2 + 1, nD0);
+
+    // Still no good — try the next window round and keep whichever wins.
     // (Vessel targets sit this out: their sampled position track only covers
     // the first window, so probing past it would be measuring a frozen target.)
-    // judge the first window on the arrival alone — the Δv tiebreaker above is
-    // for ranking candidates, not for deciding whether the window was any good
-    const soiOk = best && !target.isVessel && best.miss < (target.soi || Infinity) * 0.6;
-    if (!target.isVessel && !(dep && soiOk) && (!best || best.raw > wantMiss * 0.4)) {
+    if (unhappy()) {
       const first = best;
       best = null;
       search(t + wait + syn, tSpread0, dv0, dvSpread0, nT0, nD0);
-      if (first && (!best || first.err < best.err)) best = first;
+      // The window in front of you wins ties, and near-ties. Waiting another
+      // synodic period — three and a half weeks out to Mars — has a real cost
+      // the error figure knows nothing about, so the later window has to be
+      // decisively better (less than half the error) before it is worth
+      // taking. Without this the two windows trade places on noise, and a
+      // re-plan on the eve of the burn silently moves it 25 days out.
+      if (first && (!best || best.err > first.err * 0.5)) best = first;
       if (!best) best = first;
     }
     if (best) search(best.tBurn, period * 0.07, best.dv, Math.max(best.dv * 0.05, dvSpread0 * 0.1), 7, 7);
@@ -1065,6 +1370,49 @@
   /* ═══════════════════ ground scenery ═══════════════════ */
 
   const KINDS = {
+    // ── Earth, by biome ──
+    forest: [
+      { t: 'pine', wgt: 50, w: [4, 8], h: [10, 20] },
+      { t: 'tree', wgt: 38, w: [7, 13], h: [9, 15] },
+      { t: 'rock', wgt: 6, w: [3, 6], h: [2, 4] },
+      { t: 'house', wgt: 6, w: [8, 13], h: [6, 9] }
+    ],
+    plains: [
+      { t: 'tree', wgt: 24, w: [7, 12], h: [8, 13] },
+      { t: 'house', wgt: 32, w: [8, 15], h: [6, 10] },
+      { t: 'pine', wgt: 12, w: [4, 7], h: [9, 15] },
+      { t: 'silo', wgt: 14, w: [5, 8], h: [10, 16] },
+      { t: 'mast', wgt: 5, w: [3, 4], h: [24, 40] },
+      { t: 'rock', wgt: 13, w: [3, 6], h: [2, 4] }
+    ],
+    desert: [
+      { t: 'cactus', wgt: 30, w: [3, 6], h: [5, 11] },
+      { t: 'rock', wgt: 38, w: [4, 10], h: [2, 6] },
+      { t: 'boulder', wgt: 20, w: [11, 22], h: [7, 15] },
+      { t: 'house', wgt: 8, w: [8, 13], h: [5, 8] },
+      { t: 'mast', wgt: 4, w: [3, 4], h: [22, 34] }
+    ],
+    beach: [
+      { t: 'palm', wgt: 44, w: [6, 10], h: [10, 17] },
+      { t: 'rock', wgt: 26, w: [3, 7], h: [2, 5] },
+      { t: 'house', wgt: 22, w: [8, 13], h: [5, 9] },
+      { t: 'mast', wgt: 8, w: [3, 4], h: [20, 32] }
+    ],
+    mountain: [
+      { t: 'pine', wgt: 38, w: [3, 6], h: [8, 14] },
+      { t: 'rock', wgt: 36, w: [4, 9], h: [3, 7] },
+      { t: 'boulder', wgt: 22, w: [12, 26], h: [9, 20] },
+      { t: 'mast', wgt: 4, w: [3, 4], h: [26, 44] }
+    ],
+    // a proper skyline: towers downtown, blocks and houses out to the edges
+    city: [
+      { t: 'tower', wgt: 30, w: [11, 20], h: [40, 105] },
+      { t: 'block', wgt: 30, w: [12, 22], h: [16, 38] },
+      { t: 'house', wgt: 21, w: [8, 14], h: [6, 10] },
+      { t: 'dome', wgt: 7, w: [12, 20], h: [8, 14] },
+      { t: 'mast', wgt: 9, w: [3, 5], h: [30, 58] },
+      { t: 'tree', wgt: 3, w: [6, 10], h: [7, 11] }
+    ],
     earth: [
       { t: 'pine', wgt: 34, w: [4, 7], h: [9, 17] },
       { t: 'tree', wgt: 30, w: [7, 12], h: [8, 13] },
@@ -1099,15 +1447,22 @@
     let arr = b._sc.get(ci);
     if (arr) return arr;
     arr = [];
-    const ca = b.chunkAng, list = KINDS[b.scenery.kinds];
-    const slots = b.scenery.slots || 3;
+    const ca = b.chunkAng;
+    // what grows here depends on the country: pines in the forest, cactus and
+    // bare rock in the desert, towers downtown
+    const bio = b.biomes ? W.biome(b, (ci + 0.5) * ca) : null;
+    const inf = bio ? BIOME[bio] : null;
+    const list = KINDS[(inf && inf.scen) || b.scenery.kinds] || KINDS[b.scenery.kinds];
+    const dens = b.scenery.density * (inf ? inf.density : 1);
+    const slots = Math.max(1, Math.round((b.scenery.slots || 3) * (bio === 'city' ? 1.8 : 1)));
     for (let k = 0; k < slots; k++) {
-      if (U.hash(b.seed, ci, k * 11 + 1) > b.scenery.density) continue;
+      if (U.hash(b.seed, ci, k * 11 + 1) > dens) continue;
       const jitter = (U.hash(b.seed, ci, k * 11 + 2) - 0.5) * 0.7;
       const th = (ci + (k + 0.5 + jitter) / slots) * ca;
       const gr = terrain(b, th);
       if (b.sea && gr <= b.seaLevel + 8) continue;              // nothing in the water
-      if (b.pad && Math.abs(U.wrap(th - b.pad.theta)) < b.padClear) continue;
+      const site = b.sites ? W.siteAt(b, th) : null;
+      if (site && Math.abs(U.wrap(th - site.theta)) < site.clear) continue;   // keep the pad clear
       const kind = pickKind(list, U.hash(b.seed, ci, k * 11 + 3));
       const rw = U.hash(b.seed, ci, k * 11 + 4), rh = U.hash(b.seed, ci, k * 11 + 5);
       arr.push({
@@ -1179,7 +1534,11 @@
       arr.push({
         th, alt, w, h, puffs,
         drift: (U.hash(b.seed + 7, ci, k * 13 + 7) - 0.35) * 4e-6,
-        op: U.lerp(0.5, 0.9, U.hash(b.seed + 7, ci, k * 13 + 8))
+        op: U.lerp(0.5, 0.9, U.hash(b.seed + 7, ci, k * 13 + 8)),
+        // where this cloud sits in the queue: cover has to reach its rank
+        // before it forms at all, so a clearing sky thins out gradually
+        // instead of every cloud in the sky blinking off together
+        rank: U.hash(b.seed + 7, ci, k * 13 + 9)
       });
     }
     b._cl.set(ci, arr);
@@ -1198,24 +1557,83 @@
       const arr = W.cloudChunk(b, ci);
       for (let i = 0; i < arr.length; i++) {
         const c = arr[i];
-        out.push({ th: c.th + c.drift * t, alt: c.alt, w: c.w, h: c.h, puffs: c.puffs, op: c.op });
+        const th = c.th + c.drift * t;
+        // the sky over this spot decides which of its clouds are there at all,
+        // how solid they look and how low and dark they hang
+        const wx = W.weather(b, th, t);
+        const room = wx.cover - c.rank;
+        if (room <= 0) continue;
+        out.push({
+          th, alt: c.alt * (1 - 0.42 * wx.storm), w: c.w,
+          h: c.h * (1 + 0.5 * wx.storm), puffs: c.puffs,
+          op: c.op * U.clamp(room / 0.18, 0, 1),
+          storm: wx.storm, rain: wx.rain, snow: wx.snow
+        });
       }
     }
     return out;
   };
 
-  /* ═══════════════════ launch site ═══════════════════ */
+  /* ═══════════════════ launch sites ═══════════════════
+     Four launch complexes, each with a city round it. Only the home pad is
+     open at the start; the rest have to be flown to and landed at before you
+     can launch from them. Their angles are resolved onto real ground here, at
+     load, so nothing downstream has to know they were ever approximate. */
 
+  /** the raw landscape, before any pad is flattened into it */
+  function baseHeight(b, th) { return b.radius + continents(b, th) + detailOf(b, th, 0); }
+
+  /** how good a site the ground at `th` makes — dry from end to end of the
+      city, and low enough that the pad isn't perched up a mountain */
+  function siteScore(b, th, span) {
+    let low = Infinity, high = -Infinity;
+    for (let i = -3; i <= 3; i++) {
+      const h = baseHeight(b, th + (i / 3) * span) - b.seaLevel;
+      if (h < low) low = h;
+      if (h > high) high = h;
+    }
+    if (low < 60) return -1;                    // half the city would be in the sea
+    if (high > 1900) return -1;                 // and it shouldn't be up a mountain
+    return 1 / (1 + high / 700 + (high - low) / 500);
+  }
+
+  function resolveSites(b) {
+    const span = 0.028;                          // ±8.4 km of city either side
+    b.sites = b.siteSpec.map(function (spec) {
+      let th = spec.want, best = -1;
+      if (!spec.home) {
+        for (let k = 0; k <= 120; k++) {
+          const cand = spec.want + (k % 2 ? -1 : 1) * Math.ceil(k / 2) * 0.011;
+          const sc = siteScore(b, cand, span);
+          if (sc > best) { best = sc; th = cand; }
+          if (best > 0.45) break;                // good enough, and still close by
+        }
+      }
+      return {
+        id: spec.id, name: spec.name, padName: spec.pad, home: !!spec.home,
+        theta: U.wrap(th), width: 0.011, span, clear: 0.0024, smog: spec.smog,
+        flat: b.radius + continents(b, th)
+      };
+    });
+    b.pad = b.sites[0];                          // the home pad, for everything
+  }                                              // that only knows about one
+
+  resolveSites(EARTH);
+
+  W.sites = EARTH.sites;
   W.padTheta = EARTH.pad.theta;
   W.padGround = terrain(EARTH, EARTH.pad.theta);
 
-  /** the pad in world coordinates — Earth is going round the Sun now, so this
-      moves with it (and so does everything sitting on it) */
-  W.padPoint = function (t) {
+  /** where a launch complex is in world coordinates — Earth is going round the
+      Sun, so a pad is a moving place (and so is everything sitting on it) */
+  W.padPoint = function (t, site) {
+    const st = site || EARTH.pad;
     const bp = W.bodyPos(EARTH, t == null ? W.t : t);
+    const gr = terrain(EARTH, st.theta);
     return {
-      x: bp.x + W.padGround * Math.cos(W.padTheta),
-      y: bp.y + W.padGround * Math.sin(W.padTheta)
+      x: bp.x + gr * Math.cos(st.theta),
+      y: bp.y + gr * Math.sin(st.theta),
+      ground: gr, theta: st.theta
     };
   };
 

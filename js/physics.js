@@ -100,12 +100,36 @@
     if (S.fx) S.fx.clock = t;
     for (let i = 0; i < vessels.length; i++) {
       const v = vessels[i];
-      if (!v.dead) stepVessel(v, dt, t);
+      if (v.dead) coastWreck(v, dt, t); else stepVessel(v, dt, t);
     }
     collideVessels(vessels, t);
   };
 
+  /**
+   * A destroyed craft is not flown any more, but it is still *somewhere* — the
+   * camera holds on the wreck for five seconds while it burns. Leaving its
+   * world coordinates untouched used to mean leaving it where it died; now
+   * that Earth laps the Sun at two kilometres a second, standing still in
+   * world space means sliding past the ground at two kilometres a second,
+   * which sent the view diving the instant anything blew up. So a wreck on the
+   * ground rides the ground, and one still in the air coasts ballistically.
+   */
+  const coastWreck = PH.driftWreck = function (v, dt, t) {
+    const b = v.nearBody || W.soiBody(v.x, v.y, t);
+    if (v.landed || v.touching) {
+      const bv = W.bodyVel(b, t);
+      v.x += bv.x * dt; v.y += bv.y * dt;
+      v.vx = bv.x; v.vy = bv.y;
+      return;
+    }
+    W.gravity(v.x, v.y, t, _g);
+    v.vx += _g.x * dt; v.vy += _g.y * dt;
+    v.x += v.vx * dt; v.y += v.vy * dt;
+  };
+
   /* ═══════════════════ hull-to-hull collision ═══════════════════ */
+
+  const _wind = { x: 0, y: 0, speed: 0, cross: 0 };
 
   const _cpA = [], _cpB = [], _hitList = [];
   const _hit = { nx: 0, ny: 0, depth: 0 };
@@ -238,9 +262,22 @@
     const atmoF = near.atmo ? rho / near.atmo.rho0 : 0;
 
     const nose = v.noseDir();
-    // velocity through the air, which travels with the world it belongs to
+    // velocity through the air, which travels with the world it belongs to —
+    // and, inside the weather layer, blows about on top of that
     const airV = W.bodyVel(near, t);
-    const avx = v.vx - airV.x, avy = v.vy - airV.y;
+    let avx = v.vx - airV.x, avy = v.vy - airV.y;
+    let wxRain = 0;
+    if (rho > 1e-7) {
+      const wnd = W.windAt(near, gi.th, altASL, t, _wind);
+      avx -= wnd.x; avy -= wnd.y;
+      v.windSpd = wnd.speed;
+      const wx = W.weather(near, gi.th, t);
+      wxRain = wx.rain + wx.snow;
+      v.wx = wx;
+    } else {
+      v.windSpd = 0;
+      v.wx = null;
+    }
     const airSpd = Math.hypot(avx, avy);
 
     /* ── attitude command ── */
@@ -331,7 +368,10 @@
       const q = 0.5 * rho * airSpd * airSpd;
 
       // axial drag, straight through the centre of mass
-      const cdAx = vAx > 0 ? A.cdFwd : A.cdBack;
+      // rain and snow are extra mass in the airstream — a modest penalty, but
+      // enough that a launch into a downpour climbs a little more slowly
+      const wet = 1 + 0.16 * wxRain;
+      const cdAx = (vAx > 0 ? A.cdFwd : A.cdBack) * wet;
       const fAx = 0.5 * rho * vAx * Math.abs(vAx) * cdAx * A.areaAx * DRAG_K;
       Fx -= nose.x * fAx; Fy -= nose.y * fAx;
 
@@ -339,7 +379,7 @@
       const lvx = avx - nose.x * vAx, lvy = avy - nose.y * vAx;
       const lSpd = Math.hypot(lvx, lvy);
       if (lSpd > 0.05) {
-        const k = 0.5 * rho * lSpd * DRAG_K;
+        const k = 0.5 * rho * lSpd * DRAG_K * wet;
         for (const it of A.lat) {
           const f = k * it.cdA;
           const fx = -lvx * f, fy = -lvy * f;
@@ -450,8 +490,16 @@
     // are headed) and from wherever the Sun happens to be
     if (flux > 0) heatFrom(ps, v.com, v.angle, flux, avx, avy, dt);
     if (sunFlux > 2e-5) heatFrom(ps, v.com, v.angle, sunFlux, sdx, sdy, dt);
-    // remember which of the two is doing the damage, so the obituary is right
-    v.cookedBy = sunFlux > flux ? 'sun' : 'air';
+    // remember which of the two is doing the damage, so the obituary is right —
+    // and which way it is arriving from, so the glow and the trail come off the
+    // face that is actually being cooked rather than off the nose by default
+    const bySun = sunFlux > flux;
+    v.cookedBy = bySun ? 'sun' : 'air';
+    const hx = bySun ? sdx : avx, hy = bySun ? sdy : avy;
+    const hl = Math.hypot(hx, hy) || 1;
+    if (!v.heatDir) v.heatDir = { x: 0, y: 1 };
+    v.heatDir.x = hx / hl;
+    v.heatDir.y = hy / hl;
 
     let worst = 0, hottest = 0, cooked = null;
     for (const p of ps) {
@@ -761,7 +809,10 @@
       const t0 = t + h * i, t1 = t0 + h;
       if (S.fx) S.fx.clock = t0;
       for (const v of vessels) {
-        if (v.dead || v.crash) continue;
+        if (v.crash) continue;
+        // a wreck still has to travel with its world, or the camera holding on
+        // it dives away from the ground (see coastWreck)
+        if (v.dead) { coastWreck(v, h, t0); continue; }
         v._px = v.x; v._py = v.y; v._pvx = v.vx; v._pvy = v.vy;
         // a craft sitting on the ground rides along with its world rather than
         // free-falling through it while the clock is wound forward

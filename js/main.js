@@ -5,6 +5,7 @@
   'use strict';
 
   const U = S.util;
+  const W = S.world;
   const B = S.builder;
   const F = S.flight;
   const R = S.render;
@@ -69,7 +70,7 @@
     document.getElementById('buildUI').classList.toggle('hidden', s !== 'build');
     document.getElementById('flightUI').classList.toggle('hidden', s !== 'flight');
     F.setSceneActive(s === 'flight');
-    if (s === 'build') { B.fit(); refreshStats(); refreshStageEdit(); }
+    if (s === 'build') { B.fit(); refreshStats(); refreshStageEdit(); paintSiteInfo(); }
     if (s === 'menu') renderProgress();
     if (s !== 'flight') paintMissionBar(); else hideMissionBar();
   }
@@ -175,7 +176,7 @@
     if (scene === 'flight') {
       R.follow(F.focus, F.t, dt);
       R.frame(ctx, cw, ch, dpr, {
-        t: F.t, vessels: F.vessels, focus: F.focus, path: F.path, el: F.el,
+        t: F.t, dt: dt, vessels: F.vessels, focus: F.focus, path: F.path, el: F.el,
         plan: F.plan, target: F.target
       });
     } else {
@@ -184,7 +185,7 @@
       // player is about to click (buttons go stale mid-click) for no visible
       // benefit — a few times a second is plenty to keep it live
       missionBarTimer -= dt;
-      if (missionBarTimer <= 0) { paintMissionBar(); missionBarTimer = 0.5; }
+      if (missionBarTimer <= 0) { paintMissionBar(); paintSiteInfo(); missionBarTimer = 0.5; }
     }
     requestAnimationFrame(loop);
   }
@@ -381,6 +382,13 @@
         else if (a === 'launch') doLaunch();
       };
     });
+    const siteSel = document.getElementById('siteSel');
+    if (siteSel) {
+      siteSel.onchange = () => {
+        if (!F.setLaunchSite(siteSel.value)) siteSel.value = F.launchSite;
+        paintSiteInfo();
+      };
+    }
     document.getElementById('seAuto').onclick = () => { B.autoStage(); B.changed(); };
     document.getElementById('seAdd').onclick = () => B.addStage();
     document.getElementById('bpClose').onclick = () => document.getElementById('blueprintPanel').classList.add('hidden');
@@ -391,6 +399,36 @@
       openBlueprints();
       F.toast('Saved "' + n + '"');
     };
+  }
+
+  /**
+   * The launch-site picker, plus a line of local conditions underneath it —
+   * the same time of day and weather the craft will meet on the pad, so the
+   * player can see they are about to launch into a gale at two in the morning.
+   */
+  function paintSiteInfo() {
+    const sel = document.getElementById('siteSel');
+    const info = document.getElementById('siteInfo');
+    if (!sel || !info) return;
+    info.classList.toggle('hidden', scene !== 'build');
+    if (sel.options.length !== W.sites.length || sel._locked !== W.sites.filter(x => F.siteUnlocked(x.id)).length) {
+      sel.innerHTML = '';
+      for (const st of W.sites) {
+        const o = document.createElement('option');
+        const open = F.siteUnlocked(st.id);
+        o.value = st.id;
+        o.textContent = (open ? '' : '🔒 ') + st.name;
+        o.disabled = !open;
+        sel.appendChild(o);
+      }
+      sel._locked = W.sites.filter(x => F.siteUnlocked(x.id)).length;
+    }
+    sel.value = F.launchSite;
+    const st = F.site();
+    const wx = W.weather(W.earth, st.theta, F.t);
+    info.textContent = st.padName + ' · ' + W.clockAt(W.earth, st.theta, F.t) +
+      ' · ' + wx.label + ' · wind ' + Math.abs(wx.wind).toFixed(0) + ' m/s · ' +
+      wx.temp.toFixed(0) + '°C';
   }
 
   function doLaunch() {

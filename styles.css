@@ -439,3 +439,17 @@ body.hasMissions #buildHint{bottom:calc(var(--missionH) + 26px)}
   #noCtrl{bottom:176px;font-size:10px;white-space:normal;max-width:82vw;text-align:center}
   #missionBar{width:min(420px,calc(100vw - 24px))}
 }
+
+/* ── launch-site picker in the VAB bar ── */
+#siteBox { display: flex; align-items: center; gap: 6px; font-size: 12px;
+  color: var(--dim, #93a1b5); margin: 0 4px; }
+#siteBox select { background: #16202e; color: #dbe6f4; border: 1px solid #2b3a4d;
+  border-radius: 6px; padding: 5px 6px; font: inherit; max-width: 170px; }
+#siteBox select option:disabled { color: #63707f; }
+#siteInfo { left: 50%; right: auto; bottom: auto; top: 54px; transform: translateX(-50%);
+  white-space: nowrap; }
+#siteInfo.hidden { display: none; }
+.hudRow.wx.rough b { color: #ffc65c; }
+/* time and conditions read as one line each — wrapping them looks broken */
+#timeRow b, #wxRow b { white-space: nowrap; font-size: 11px; }
+#timeRow span, #wxRow span { white-space: nowrap; }

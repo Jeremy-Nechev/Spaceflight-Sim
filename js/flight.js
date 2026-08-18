@@ -47,6 +47,8 @@
 
   const GOALS = [
     { id: 'space', label: 'Reach space (60 km)' },
+    { id: 'cityPad', label: "Land at another city's pad" },
+    { id: 'stormFly', label: 'Fly through a thunderstorm' },
     { id: 'orbit', label: 'Orbit the Earth' },
     { id: 'splash', label: 'Splash down in an ocean' },
     { id: 'moonSoi', label: 'Reach the Moon' },
@@ -105,6 +107,31 @@
     if (n >= missionSeq) missionSeq = n + 1;
   }
 
+  /* ═══════════════════ launch sites ═══════════════════
+     Earth has four launch complexes. Only the home pad is open to begin with:
+     the others have to be flown to and landed at before you can start a
+     mission from them. */
+
+  F.launchSite = U.store.get('launchSite', 'home');
+  if (!W.sites.some(x => x.id === F.launchSite)) F.launchSite = 'home';
+
+  F.siteUnlocked = function (id) {
+    return id === 'home' || !!F.progress['site:' + id];
+  };
+
+  /** the site a new launch will start from */
+  F.site = function () {
+    const st = W.site(F.launchSite);
+    return F.siteUnlocked(st.id) ? st : W.site('home');
+  };
+
+  F.setLaunchSite = function (id) {
+    if (!F.siteUnlocked(id)) { F.toast('That pad has to be visited before you can launch from it', 'bad'); return false; }
+    F.launchSite = id;
+    U.store.set('launchSite', id);
+    return true;
+  };
+
   /** Build a fresh vessel from a blueprint and sit it on the pad, nose
       straight up. Shared by a brand-new game, an additional launch
       alongside missions already flying, and a per-mission revert. */
@@ -115,9 +142,10 @@
     // if another craft is still sitting on the pad (e.g. launching a second
     // rocket before the first has lifted off), nudge this one along the pad
     // instead of spawning it stacked directly inside the other one
-    const pad = W.padPoint(F.t);
+    const site = F.site();
+    const pad = W.padPoint(F.t, site);
     const parked = F.vessels.filter(x => !x.dead && Math.hypot(x.x - pad.x, x.y - pad.y) < 400).length;
-    const th = W.padTheta + (parked ? Math.ceil(parked / 2) * (parked % 2 ? 1 : -1) * 0.002 : 0);
+    const th = site.theta + (parked ? Math.ceil(parked / 2) * (parked % 2 ? 1 : -1) * 0.002 : 0);
 
     const g = W.terrain(W.earth, th);
     let lo = Infinity;
@@ -501,7 +529,18 @@
     }
     W.t = F.t;
 
-    S.fx.update(rails ? 0 : dt, F.t, v ? (v.nearBody || W.earth) : W.earth);
+    // The wreck the camera is holding on was spliced out of the sim the moment
+    // it died (see cleanup), so nothing is moving it any more — and a thing at
+    // rest in world coordinates slides past the ground at Earth's two
+    // kilometres a second, which dragged the view down off the crash site.
+    if (wreckFocus && F.vessels.indexOf(wreckFocus) < 0) PH.driftWreck(wreckFocus, simDt, F.t);
+
+    // Particles age on the *sim* clock, not the wall clock. Smoke is emitted
+    // per second of flight, so ageing it per second of real time meant that at
+    // 2× warp the rocket laid down its trail twice as fast while each puff
+    // billowed and faded at the old rate — the plume came out stretched thin,
+    // and the particle budget was spent on a trail nobody could see the end of.
+    S.fx.update(rails ? 0 : simDt, F.t, v ? (v.nearBody || W.earth) : W.earth);
     S.fx.clock = F.t;                      // anything spawned below is born now
     cleanup();
     checkGoals();
@@ -730,6 +769,23 @@
       if (el.body === W.earth && el.pe > W.earth.radius + 60000) unlock('orbit');
       if (el.body === W.moon && el.pe > W.moon.radius + 3000 && !v.landed) unlock('moonOrbit');
       if (el.body === W.mars && el.pe > W.mars.radius + 28000 && !v.landed) unlock('marsOrbit');
+    }
+
+    // weather you can put in the mission log: the inside of a thunderstorm
+    if (b.atmo && v.altASL < 12000 && v.wx && v.wx.storm > 0.5) unlock('stormFly');
+
+    // landing at another city's launch complex opens it up as a launch site
+    if (v.landed && b === W.earth) {
+      const bp2 = W.bodyPos(b, F.t);
+      const th2 = Math.atan2(v.y - bp2.y, v.x - bp2.x);
+      const st = W.siteAt(b, th2);
+      if (st && Math.abs(U.wrap(th2 - st.theta)) * b.radius < 2500 && !F.progress['site:' + st.id]) {
+        F.progress['site:' + st.id] = true;
+        U.store.set('progress', F.progress);
+        F.toast('★ ' + st.padName + ' is now open for launches', 'gold');
+        if (S.audio) S.audio.blip(880, 0.18, 'sine', 0.12);
+        if (!st.home) unlock('cityPad');
+      }
     }
 
     if (v.landed) {
@@ -1254,6 +1310,26 @@
 
     // friction heating, as a share of what the most stressed part can take —
     // only worth screen space once there's actually something to watch
+    // time of day and weather where the craft actually is — only meaningful
+    // over a world that has both a day and an atmosphere
+    const wxRow = document.getElementById('wxRow');
+    const timeRow = document.getElementById('timeRow');
+    const th = Math.atan2(dy, dx);
+    if (timeRow) {
+      const showT = !!b.spin && agl < 400000;
+      timeRow.classList.toggle('hidden', !showT);
+      if (showT) set('hTime', W.clockAt(b, th, F.t) + ' · ' + W.dayPart(b, th, F.t));
+    }
+    if (wxRow) {
+      const wx = (b.atmo && agl < b.atmo.height * 1.2) ? W.weather(b, th, F.t) : null;
+      wxRow.classList.toggle('hidden', !wx);
+      wxRow.classList.toggle('rough', !!wx && (wx.storm > 0.35 || Math.abs(wx.wind) > 18));
+      if (wx) {
+        const wind = Math.abs(v.windSpd || wx.wind);
+        set('hWx', wx.label + ' · ' + wind.toFixed(0) + ' m/s');
+      }
+    }
+
     const heatRow = document.getElementById('heatRow');
     const hf = v.heatFrac || 0;
     if (heatRow) {

@@ -105,6 +105,7 @@
     <button data-act="clear">Clear</button>
     <button data-act="save">💾 Save</button>
     <button data-act="load">📂 Load</button>
+    <label id="siteBox" title="Which launch complex to start from. New pads open up once you land a craft at them."><span>Site</span><select id="siteSel"></select></label>
     <button data-act="launch" class="primary">LAUNCH ▶</button>
   </div>
 
@@ -121,6 +122,8 @@
     <button id="seAdd" class="seAdd">+ Add stage</button>
     <div class="seHint">Drag a part chip to a stage row (or click a chip, then click the row) to move it there.</div>
   </div>
+
+  <div id="siteInfo" class="hint"></div>
 
   <div id="buildHint" class="hint">Pick a part on the left, then click in the hangar to place it.</div>
 
@@ -160,6 +163,8 @@
     <div class="hudRow"><span>TWR</span><b id="hTwr">0.00</b></div>
     <div class="hudRow"><span>Δv left</span><b id="hDv">0 m/s</b></div>
     <div class="hudRow heat hidden" id="heatRow" title="How hot friction has made the most exposed part, as a share of what it can take"><span>Hull heat</span><b id="hHeat">0%</b></div>
+    <div class="hudRow hidden" id="timeRow" title="Local solar time under the craft"><span>Local</span><b id="hTime">--:--</b></div>
+    <div class="hudRow wx hidden" id="wxRow" title="Conditions where you are flying, and the wind through your airframe"><span>Weather</span><b id="hWx">clear</b></div>
     <div class="hudRow soi"><span>Sphere</span><b id="hSoi">Earth</b></div>
   </div>
 

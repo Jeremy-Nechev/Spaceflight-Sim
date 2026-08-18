@@ -13,7 +13,41 @@
   const W = S.world;
   const R = S.render = {};
 
-  const SUN = 0.9;                       // world angle the sunlight comes from
+  /* ── colour mixing ──
+     U.mix only speaks '#rrggbb' and hands back 'rgb()', which is no use when a
+     colour has to be blended three or four times over (sky → dusk → cloud →
+     smog). These work in [r,g,b] and only stringify at the end. */
+  const _rgbCache = new Map();
+  function rgb(c) {
+    let v = _rgbCache.get(c);
+    if (v) return v;
+    v = c.charAt(0) === '#'
+      ? [parseInt(c.slice(1, 3), 16), parseInt(c.slice(3, 5), 16), parseInt(c.slice(5, 7), 16)]
+      : c.slice(c.indexOf('(') + 1, c.indexOf(')')).split(',').map(Number);
+    _rgbCache.set(c, v);
+    return v;
+  }
+  function mixRGB(a, b, t) {
+    if (typeof a === 'string') a = rgb(a);
+    if (typeof b === 'string') b = rgb(b);
+    return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+  }
+  function css(c) {
+    return 'rgb(' + Math.round(c[0]) + ',' + Math.round(c[1]) + ',' + Math.round(c[2]) + ')';
+  }
+  function shade(c, k) {
+    if (typeof c === 'string') c = rgb(c);
+    return [c[0] * k, c[1] * k, c[2] * k];
+  }
+
+  const NIGHT_SKY = '#05070f';
+  const NIGHT_GROUND = [7, 11, 26];      // what the land fades towards after dark
+
+  // How lit the scene being drawn is, and what is falling out of its sky.
+  // drawSurface sets these before it draws the ground so the scenery artwork
+  // (city windows, in particular) can light up after dark without every
+  // routine having to be handed the clock.
+  const scene = { day: 1, dusk: 0, wx: W.CALM };
 
   /** rotation that maps local +y onto the given unit "up" vector */
   const upAngle = S.upAngle = n => Math.atan2(-n.x, n.y);
@@ -208,10 +242,10 @@
 
   /* ═══════════════════ sky ═══════════════════ */
 
-  function drawSky(ctx, cw, ch, dpr, atmoF, body) {
+  function drawSky(ctx, cw, ch, dpr, atmoF, body, th, t) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     if (atmoF <= 0.001) {
-      ctx.fillStyle = '#05070f';
+      ctx.fillStyle = NIGHT_SKY;
       ctx.fillRect(0, 0, cw, ch);
       return;
     }
@@ -224,11 +258,144 @@
     // The horizon glow fades slowest, which is how a real high-altitude sky
     // looks — dark overhead, a bright band still hugging the limb.
     const c = (body || W.earth).col;
+    const day = scene.day, dusk = scene.dusk, wx = scene.wx;
+
+    // Daylight scales the whole sky, so the same gradient carries a blue noon,
+    // a deep blue-grey night, and everything between. Dusk lays a warm band
+    // over the bottom of it — brightest right as the sun crosses the horizon,
+    // and strongest low down, which is where a sunset actually lives.
+    let hi = mixRGB(NIGHT_SKY, c.skyHi, Math.pow(atmoF, 2.6) * (0.07 + 0.93 * day));
+    let mid = mixRGB(NIGHT_SKY, c.sky, Math.pow(atmoF, 2.0) * (0.05 + 0.95 * day));
+    let lo = mixRGB(NIGHT_SKY, c.glow, Math.pow(atmoF, 1.3) * (0.04 + 0.96 * day));
+    if (dusk > 0.01) {
+      hi = mixRGB(hi, '#3b2c5e', dusk * 0.45 * atmoF);
+      mid = mixRGB(mid, '#d05f33', dusk * 0.62 * atmoF);
+      lo = mixRGB(lo, '#ff8a3c', dusk * 0.92 * atmoF);
+    }
+    // cloud greys the sky out, a storm makes it properly gloomy, and city
+    // smog puts a brown cast over the lot
+    const grey = U.clamp(wx.cover * 0.34 + wx.storm * 0.62, 0, 0.9) * atmoF;
+    if (grey > 0.01) {
+      // an overcast day is bright and flat; a thunderstorm is dark even at noon
+      const gc = mixRGB('#20242c', '#9aa3ad', day * (1 - wx.storm * 0.8));
+      hi = mixRGB(hi, gc, grey); mid = mixRGB(mid, gc, grey * 0.9); lo = mixRGB(lo, gc, grey * 0.7);
+    }
+    if (wx.smog > 0.02) {
+      const sc = mixRGB('#241d16', '#c2a173', day);
+      const k = wx.smog * 0.55 * atmoF;
+      mid = mixRGB(mid, sc, k * 0.8); lo = mixRGB(lo, sc, k);
+    }
+
     const g = ctx.createLinearGradient(0, 0, 0, ch);
-    g.addColorStop(0, U.mix('#05070f', c.skyHi, Math.pow(atmoF, 2.6)));
-    g.addColorStop(0.62, U.mix('#05070f', c.sky, Math.pow(atmoF, 2.0)));
-    g.addColorStop(1, U.mix('#05070f', c.glow, Math.pow(atmoF, 1.3)));
+    g.addColorStop(0, css(hi));
+    g.addColorStop(0.62, css(mid));
+    g.addColorStop(1, css(lo));
     ctx.fillStyle = g;
+    ctx.fillRect(0, 0, cw, ch);
+  }
+
+  /**
+   * The sun itself, hanging in the sky at the right place for the time of day.
+   * Screen-space: the close-up camera keeps the local vertical pointing up, so
+   * the sun's hour angle maps straight onto a track across the screen.
+   */
+  function drawSunInSky(ctx, cw, ch, dpr, body, th, t, atmoF) {
+    if (atmoF < 0.02) return;
+    const d = U.wrap(W.sunAngle(body, t) - th);          // 0 overhead, ±π/2 horizon
+    const el = Math.cos(d);
+    if (el < -0.16) return;                              // well down: nothing to draw
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // el = 0 puts the disc down on the horizon line, el = 1 overhead
+    const x = cw / 2 - Math.sin(d) * cw * 0.42;
+    const y = ch * (0.82 - el * 0.76);
+    const r = Math.max(9, Math.min(cw, ch) * 0.026);
+    // low sun reddens and the disc swells, the way it does through thick air
+    const warm = U.clamp(1 - el * 2.2, 0, 1);
+    const core = css(mixRGB('#fff6d8', '#ff9040', warm));
+    // thick cloud hides the sun completely — you should not be able to pick it
+    // out of a thunderstorm
+    const seen = U.clamp((el + 0.16) / 0.18, 0, 1) * atmoF *
+      U.clamp(1 - scene.wx.cover * 1.05 - scene.wx.storm * 0.6, 0, 1);
+    if (seen <= 0.01) return;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = seen * 0.5;
+    const g = ctx.createRadialGradient(x, y, r * 0.3, x, y, r * (4 + warm * 4));
+    g.addColorStop(0, core);
+    g.addColorStop(0.14, css(mixRGB('#ffe9a8', '#ff7a2a', warm)));
+    g.addColorStop(1, 'rgba(255,150,60,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r * (4 + warm * 4), 0, U.TAU);
+    ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = seen;
+    ctx.fillStyle = core;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, U.TAU);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  /* ═══════════════════ weather on screen ═══════════════════ */
+
+  // rain and snow are drawn in screen space: at any sensible zoom a raindrop is
+  // far too small to place in the world, and what the player wants is the sense
+  // of flying through it
+  const drops = [];
+  let lightning = 0, lightningIn = 6;
+
+  function drawPrecip(ctx, cw, ch, dpr, t, dt, alt, wind) {
+    const wx = scene.wx;
+    const fall = wx.rain + wx.snow;
+    // only inside the weather layer, and not once you are above the cloud tops
+    const near = U.clamp(1 - (alt - 6000) / 5000, 0, 1);
+    const k = fall * near;
+    if (k <= 0.02) { drops.length = 0; return; }
+    const snowy = wx.snow > wx.rain;
+    const want = Math.round(U.clamp(k * (snowy ? 220 : 420), 0, 460));
+    while (drops.length < want) {
+      drops.push({ x: Math.random() * cw, y: Math.random() * ch, s: 0.6 + Math.random() * 0.8,
+        w: Math.random() });
+    }
+    if (drops.length > want) drops.length = want;
+
+    // the wind blows the fall sideways — the same wind the craft is fighting
+    const slant = U.clamp(wind / (snowy ? 6 : 28), -2.2, 2.2);
+    const vy = snowy ? 90 : 620;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.strokeStyle = snowy ? 'rgba(240,248,255,.9)' : 'rgba(205,226,250,.75)';
+    ctx.fillStyle = 'rgba(245,250,255,.9)';
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    for (let i = 0; i < drops.length; i++) {
+      const d = drops[i];
+      d.y += vy * d.s * dt;
+      d.x += slant * vy * d.s * dt * 0.5 + (snowy ? Math.sin(t * 1.7 + d.w * 9) * 14 * dt * 60 * 0.02 : 0);
+      if (d.y > ch) { d.y = -8; d.x = Math.random() * cw; }
+      if (d.x < -20) d.x += cw + 40; else if (d.x > cw + 20) d.x -= cw + 40;
+      if (snowy) {
+        ctx.moveTo(d.x + 1.4 * d.s, d.y);
+        ctx.arc(d.x, d.y, 1.4 * d.s, 0, U.TAU);
+      } else {
+        const L = 13 * d.s;
+        ctx.moveTo(d.x, d.y);
+        ctx.lineTo(d.x + slant * L * 0.5, d.y + L);
+      }
+    }
+    if (snowy) ctx.fill(); else ctx.stroke();
+  }
+
+  /** the odd flash of lightning inside a thunderstorm */
+  function drawLightning(ctx, cw, ch, dpr, dt, alt) {
+    const st = scene.wx.storm * U.clamp(1 - (alt - 9000) / 6000, 0, 1);
+    if (st < 0.25) { lightning = 0; return; }
+    lightningIn -= dt * st;
+    if (lightningIn <= 0) { lightning = 0.16; lightningIn = 3 + Math.random() * 9; }
+    if (lightning <= 0) return;
+    lightning -= dt;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = 'rgba(226,238,255,' + (0.42 * U.clamp(lightning / 0.16, 0, 1)).toFixed(3) + ')';
     ctx.fillRect(0, 0, cw, ch);
   }
 
@@ -262,7 +429,7 @@
     const orbK = smoothstep(0.30, 0.46, halfAng);
 
     if (b.atmo) drawAtmosphere(ctx, b, rx, ry, zoom, viewR);
-    if (orbK > 0.01) drawOrbital(ctx, b, rx, ry, zoom, orbK);
+    if (orbK > 0.01) drawOrbital(ctx, b, rx, ry, zoom, orbK, t);
     if (orbK < 0.99) drawSurface(ctx, b, t, rx, ry, thC, halfAng, zoom, viewR, 1 - orbK);
   }
 
@@ -301,14 +468,17 @@
    * the disc is the planet's bulk and land/ocean show as a coloured band round
    * the edge — drawing continents as pie sectors would read as a pie chart.
    */
-  function drawOrbital(ctx, b, rx, ry, zoom, alpha) {
+  function drawOrbital(ctx, b, rx, ry, zoom, alpha, t) {
     ctx.save();
     ctx.globalAlpha = alpha;
     const Rr = b.radius;
+    // the lit side is wherever the sunlight is falling from *now* — which is
+    // what makes the terminator crawl round the globe as the day passes
+    const sunA = W.sunAngle(b, t == null ? W.t : t);
 
     // bulk
     const core = ctx.createRadialGradient(
-      rx - Math.cos(SUN) * Rr * 0.3, ry - Math.sin(SUN) * Rr * 0.3, Rr * 0.05, rx, ry, Rr);
+      rx + Math.cos(sunA) * Rr * 0.3, ry + Math.sin(sunA) * Rr * 0.3, Rr * 0.05, rx, ry, Rr);
     core.addColorStop(0, b.col.core);
     core.addColorStop(1, b.col.coreLo);
     ctx.beginPath(); ctx.arc(rx, ry, Rr, 0, U.TAU);
@@ -354,7 +524,7 @@
     // night side
     ctx.save();
     ctx.beginPath(); ctx.arc(rx, ry, Rr, 0, U.TAU); ctx.clip();
-    const sx = Math.cos(SUN), sy = Math.sin(SUN);
+    const sx = Math.cos(sunA), sy = Math.sin(sunA);
     const ng = ctx.createLinearGradient(rx + sx * Rr, ry + sy * Rr, rx - sx * Rr, ry - sy * Rr);
     ng.addColorStop(0, 'rgba(0,0,0,0)');
     ng.addColorStop(0.42, 'rgba(0,0,0,.12)');
@@ -362,6 +532,22 @@
     ng.addColorStop(1, 'rgba(2,4,10,.86)');
     ctx.fillStyle = ng;
     ctx.fillRect(rx - Rr, ry - Rr, Rr * 2, Rr * 2);
+    // cities are the one thing you can still pick out on the dark side
+    if (b.sites && Rr * zoom > 40) {
+      ctx.globalCompositeOperation = 'lighter';
+      for (const st of b.sites) {
+        const night = 1 - U.clamp((Math.cos(U.wrap(st.theta - sunA)) + 0.14) / 0.3, 0, 1);
+        if (night < 0.15) continue;
+        const gr = W.terrain(b, st.theta);
+        const lx = rx + Math.cos(st.theta) * gr, ly = ry + Math.sin(st.theta) * gr;
+        const lr = Math.max(Rr * 0.02, 3.5 / zoom);
+        const lg = ctx.createRadialGradient(lx, ly, 0, lx, ly, lr);
+        lg.addColorStop(0, 'rgba(255,214,140,' + (0.85 * night).toFixed(3) + ')');
+        lg.addColorStop(1, 'rgba(255,180,80,0)');
+        ctx.fillStyle = lg;
+        ctx.beginPath(); ctx.arc(lx, ly, lr, 0, U.TAU); ctx.fill();
+      }
+    }
     ctx.restore();
 
     ctx.restore();
@@ -372,8 +558,19 @@
     const r = W.terrain(b, th, dth);
     if (!b.sea) return r > b.seaLevel + 900 ? b.col.rock : b.col.land;
     if (r < b.seaLevel) return r < b.seaLevel - 1400 ? b.col.waterDeep : b.col.water;
+    if (b.biomes) {
+      if (r > b.seaLevel + 2750) return SNOWCAP;         // caps on the high ground
+      return GROUND[W.biome(b, th, r)] || b.col.land;
+    }
     return r > b.seaLevel + 1500 ? b.col.rock : b.col.land;
   }
+
+  /** what each sort of country looks like from above */
+  const GROUND = {
+    ocean: '#1f6fa8', beach: '#d8c390', desert: '#c9ae6d', plains: '#6f8f42',
+    forest: '#375f2c', mountain: '#8a8175', city: '#7c7b78'
+  };
+  const SNOWCAP = '#e8eef5';
 
   function drawCraters(ctx, b, rx, ry, Rr) {
     const rnd = U.rng(4242);
@@ -449,11 +646,20 @@
     /* ── surface crust, coloured by material ── */
     const crust = Math.max(1.5, viewR * 0.035);
     ctx.lineWidth = crust; ctx.lineJoin = 'round'; ctx.lineCap = 'butt';
-    const matOf = i => {
-      if (b.sea && rr[i] < b.seaLevel + 45) return b.col.sand;
-      if (rr[i] > b.seaLevel + 2100) return b.col.rock;
-      return b.col.land;
-    };
+    // on a world with biomes the ground itself tells you where you are:
+    // sand through the desert, dark green under forest, grey through a city,
+    // bare rock and snow on the tops
+    const matOf = b.biomes
+      ? i => {
+        if (b.sea && rr[i] < b.seaLevel + 45) return b.col.sand;
+        if (rr[i] > b.seaLevel + 2750) return SNOWCAP;
+        return GROUND[W.biome(b, th[i], rr[i])] || b.col.land;
+      }
+      : i => {
+        if (b.sea && rr[i] < b.seaLevel + 45) return b.col.sand;
+        if (rr[i] > b.seaLevel + 2100) return b.col.rock;
+        return b.col.land;
+      };
     let runStart = 0, runMat = matOf(0);
     for (let i = 1; i <= n + 1; i++) {
       const m = i <= n ? matOf(i) : null;
@@ -474,10 +680,84 @@
 
     /* ── clouds behind nothing, scenery on the ground ── */
     if (b.scenery) drawScenery(ctx, b, t, rx, ry, th0, th0 + span, zoom);
-    if (b.pad) drawPad(ctx, b, rx, ry, th0, th0 + span, zoom);
+    if (b.sites) for (const st of b.sites) drawPad(ctx, b, st, rx, ry, th0, th0 + span, zoom);
+    else if (b.pad) drawPad(ctx, b, b.pad, rx, ry, th0, th0 + span, zoom);
+    drawNight(ctx, b, t, rx, ry, th, rr, n, viewR);
+    if (b.sites) drawSmog(ctx, b, t, rx, ry, th0, th0 + span, zoom);
     if (b.clouds) drawClouds(ctx, b, t, rx, ry, th0, th0 + span, zoom, viewR);
 
     ctx.restore();
+  }
+
+  /**
+   * Nightfall over the ground. The land and everything standing on it is
+   * already drawn by now, so darkness is one veil laid over the lot — graded
+   * along the arc, so from high up you can watch the terminator crossing the
+   * landscape rather than the whole view dimming at once.
+   */
+  function drawNight(ctx, b, t, rx, ry, th, rr, n, viewR) {
+    if (!b.spin) return;
+    const d0 = W.daylight(b, th[0], t), d1 = W.daylight(b, th[n], t);
+    const a0 = (1 - d0) * 0.78, a1 = (1 - d1) * 0.78;
+    if (a0 < 0.01 && a1 < 0.01) return;
+    const depth = viewR * 3.2;
+    const outer = i => (b.sea ? Math.max(rr[i], b.seaLevel) : rr[i]);
+    ctx.beginPath();
+    for (let i = 0; i <= n; i++) {
+      const r = outer(i);
+      const x = rx + Math.cos(th[i]) * r, y = ry + Math.sin(th[i]) * r;
+      if (!i) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    let minR = Infinity;
+    for (let i = 0; i <= n; i++) minR = Math.min(minR, rr[i]);
+    const rin = Math.max(b.radius * 0.35, minR - depth);
+    for (let i = n; i >= 0; i--) ctx.lineTo(rx + Math.cos(th[i]) * rin, ry + Math.sin(th[i]) * rin);
+    ctx.closePath();
+    const nc = NIGHT_GROUND.join(',');
+    const g = ctx.createLinearGradient(
+      rx + Math.cos(th[0]) * b.radius, ry + Math.sin(th[0]) * b.radius,
+      rx + Math.cos(th[n]) * b.radius, ry + Math.sin(th[n]) * b.radius);
+    g.addColorStop(0, 'rgba(' + nc + ',' + a0.toFixed(3) + ')');
+    g.addColorStop(1, 'rgba(' + nc + ',' + a1.toFixed(3) + ')');
+    ctx.fillStyle = g;
+    ctx.fill();
+  }
+
+  /** the brown lid a city keeps over itself on a still day */
+  function drawSmog(ctx, b, t, rx, ry, th0, th1, zoom) {
+    for (const st of b.sites) {
+      if (st.theta + st.span < th0 || st.theta - st.span > th1) continue;
+      const wx = W.weather(b, st.theta, t);
+      if (wx.smog < 0.05) continue;
+      const gr = W.terrain(b, st.theta);
+      const top = gr + 1500;
+      if ((top - gr) * zoom < 1.5) continue;
+      const a0 = Math.max(th0, st.theta - st.span * 1.25);
+      const a1 = Math.min(th1, st.theta + st.span * 1.25);
+      const steps = 26;
+      ctx.beginPath();
+      for (let i = 0; i <= steps; i++) {
+        const a = a0 + (a1 - a0) * i / steps;
+        const r = W.terrain(b, a);
+        const x = rx + Math.cos(a) * r, y = ry + Math.sin(a) * r;
+        if (!i) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      for (let i = steps; i >= 0; i--) {
+        const a = a0 + (a1 - a0) * i / steps;
+        // thickest over the middle of town, thinning out at the edges
+        const k = Math.cos((a - st.theta) / (st.span * 1.25) * Math.PI / 2);
+        ctx.lineTo(rx + Math.cos(a) * (W.terrain(b, a) + 1500 * k * k),
+          ry + Math.sin(a) * (W.terrain(b, a) + 1500 * k * k));
+      }
+      ctx.closePath();
+      const g = ctx.createRadialGradient(rx, ry, gr, rx, ry, top);
+      const day = W.daylight(b, st.theta, t);
+      const col = css(mixRGB('#3a3126', '#b39a6e', day));
+      g.addColorStop(0, 'rgba(' + rgb(col).map(Math.round).join(',') + ',' + (0.5 * wx.smog).toFixed(3) + ')');
+      g.addColorStop(1, 'rgba(' + rgb(col).map(Math.round).join(',') + ',0)');
+      ctx.fillStyle = g;
+      ctx.fill();
+    }
   }
 
   function drawWater(ctx, b, t, rx, ry, th, rr, n, viewR, zoom) {
@@ -603,12 +883,7 @@
       ctx.fillRect(-w / 2, 0, w, h);
       ctx.strokeStyle = 'rgba(30,34,42,.55)'; ctx.lineWidth = Math.max(0.06, w * 0.012);
       ctx.strokeRect(-w / 2, 0, w, h);
-      const cols = Math.max(2, Math.round(w / 3)), rows = Math.max(3, Math.round(h / 3.4));
-      for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
-        const lit = U.hash(o.seed, r, c) > 0.55;
-        ctx.fillStyle = lit ? 'rgba(255,225,150,.85)' : 'rgba(45,58,75,.85)';
-        ctx.fillRect(-w / 2 + w * (c + 0.28) / cols, h * (r + 0.3) / rows, w * 0.44 / cols, h * 0.4 / rows);
-      }
+      windows(ctx, o, -w / 2, 0, w, h);
     },
     mast(ctx, o) {
       const w = o.w, h = o.h;
@@ -628,6 +903,84 @@
       ctx.fillStyle = '#ff4444';
       ctx.beginPath(); ctx.arc(0, h * 1.02, w * 0.16, 0, U.TAU); ctx.fill();
     },
+    /** a desert saguaro — trunk and a raised arm or two */
+    cactus(ctx, o) {
+      const w = o.w, h = o.h;
+      ctx.strokeStyle = '#3f6b39'; ctx.lineCap = 'round';
+      ctx.lineWidth = w * 0.34;
+      ctx.beginPath();
+      ctx.moveTo(0, 0); ctx.lineTo(0, h);
+      ctx.stroke();
+      ctx.lineWidth = w * 0.24;
+      const arms = U.hash(o.seed, 1, 2) > 0.4 ? 2 : 1;
+      ctx.beginPath();
+      ctx.moveTo(0, h * 0.45); ctx.lineTo(-w * 0.42, h * 0.45); ctx.lineTo(-w * 0.42, h * 0.72);
+      if (arms > 1) { ctx.moveTo(0, h * 0.58); ctx.lineTo(w * 0.4, h * 0.58); ctx.lineTo(w * 0.4, h * 0.8); }
+      ctx.stroke();
+    },
+    /** a palm: a leaning trunk with a crown of fronds */
+    palm(ctx, o) {
+      const w = o.w, h = o.h;
+      const lean = (U.hash(o.seed, 2, 3) - 0.5) * w * 0.5;
+      ctx.strokeStyle = '#7a6242'; ctx.lineWidth = w * 0.13; ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(lean * 0.5, h * 0.55, lean, h * 0.86);
+      ctx.stroke();
+      ctx.strokeStyle = '#3f7d3d'; ctx.lineWidth = w * 0.1;
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = Math.PI * (0.12 + i * 0.152);
+        ctx.moveTo(lean, h * 0.86);
+        ctx.quadraticCurveTo(lean + Math.cos(a) * w * 0.4, h * 0.86 + Math.sin(a) * h * 0.22,
+          lean + Math.cos(a) * w * 0.78, h * 0.86 + Math.sin(a) * h * 0.16 - h * 0.1);
+      }
+      ctx.stroke();
+    },
+    /** a downtown tower — the tall stuff a city is built round */
+    tower(ctx, o, t) {
+      const w = o.w, h = o.h;
+      const step = U.hash(o.seed, 3, 1) > 0.55;      // some of them set back near the top
+      const upW = step ? w * 0.62 : w;
+      const brk = step ? h * 0.72 : h;
+      ctx.fillStyle = '#767d8a';
+      ctx.fillRect(-w / 2, 0, w, brk);
+      if (step) ctx.fillRect(-upW / 2, brk, upW, h - brk);
+      ctx.strokeStyle = 'rgba(24,28,36,.55)'; ctx.lineWidth = Math.max(0.06, w * 0.01);
+      ctx.strokeRect(-w / 2, 0, w, brk);
+      if (step) ctx.strokeRect(-upW / 2, brk, upW, h - brk);
+      windows(ctx, o, -w / 2, 0, w, brk);
+      if (step) windows(ctx, o, -upW / 2, brk, upW, h - brk);
+      // aircraft warning light on top, blinking after dark
+      if (scene.day < 0.7) {
+        ctx.fillStyle = 'rgba(255,70,70,' + (0.5 + 0.5 * Math.sin(o.seed + t * 3)).toFixed(2) + ')';
+        ctx.beginPath(); ctx.arc(0, h + w * 0.1, w * 0.09, 0, U.TAU); ctx.fill();
+      }
+    },
+    /** a stadium/gasholder dome, for a bit of variety downtown */
+    dome(ctx, o) {
+      const w = o.w, h = o.h;
+      ctx.fillStyle = '#9aa0a8';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, w / 2, h, 0, 0, Math.PI, true);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(30,34,42,.5)'; ctx.lineWidth = Math.max(0.06, w * 0.012);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(60,68,80,.5)';
+      ctx.fillRect(-w / 2, 0, w, h * 0.08);
+    },
+    /** a farm silo out on the plains */
+    silo(ctx, o) {
+      const w = o.w, h = o.h;
+      ctx.fillStyle = '#c9c4b6';
+      ctx.fillRect(-w * 0.3, 0, w * 0.6, h * 0.82);
+      ctx.strokeStyle = 'rgba(40,36,30,.45)'; ctx.lineWidth = Math.max(0.05, w * 0.02);
+      ctx.strokeRect(-w * 0.3, 0, w * 0.6, h * 0.82);
+      ctx.beginPath();
+      ctx.moveTo(-w * 0.34, h * 0.82); ctx.lineTo(0, h); ctx.lineTo(w * 0.34, h * 0.82);
+      ctx.closePath();
+      ctx.fillStyle = '#8a8f96'; ctx.fill();
+    },
     rock(ctx, o) { blob(ctx, o, '#7d7a73', '#5d5a54'); },
     boulder(ctx, o) { blob(ctx, o, '#8b877f', '#63605a'); },
     flag(ctx, o) {
@@ -638,6 +991,25 @@
       ctx.fillRect(0, h * 0.6, w * 0.9, h * 0.3);
     }
   };
+
+  /**
+   * A grid of windows. How many are lit depends on the hour: a wall of glass in
+   * daylight, a scattering of warm squares once it is dark — which is what
+   * turns a city into a skyline at night.
+   */
+  function windows(ctx, o, x0, y0, w, h) {
+    const cols = Math.max(2, Math.round(w / 3.2)), rows = Math.max(2, Math.round(h / 3.6));
+    const night = 1 - scene.day;
+    const lit = 0.12 + 0.55 * night;
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const on = U.hash(o.seed, r, c) < lit;
+      ctx.fillStyle = on
+        ? 'rgba(255,226,155,' + (0.35 + 0.6 * night).toFixed(2) + ')'
+        : 'rgba(45,58,75,.75)';
+      ctx.fillRect(x0 + w * (c + 0.26) / cols, y0 + h * (r + 0.28) / rows,
+        w * 0.48 / cols, h * 0.42 / rows);
+    }
+  }
 
   function blob(ctx, o, c1, c2) {
     const w = o.w, h = o.h, n = 7;
@@ -655,9 +1027,9 @@
     ctx.fillStyle = g; ctx.fill();
   }
 
-  /** the launch complex sitting on the flattened plateau */
-  function drawPad(ctx, b, rx, ry, th0, th1, zoom) {
-    const pt = b.pad.theta;
+  /** a launch complex sitting on its flattened plateau */
+  function drawPad(ctx, b, site, rx, ry, th0, th1, zoom) {
+    const pt = site.theta;
     if (pt < th0 - 0.002 || pt > th1 + 0.002) return;
     if (60 * zoom < 1) return;
     const gr = W.terrain(b, pt);
@@ -689,6 +1061,20 @@
     ctx.stroke();
     ctx.fillStyle = '#c94f2f';
     ctx.fillRect(13.4, 46, 8.2, 1.4);
+    // floodlights, which are only worth anything after dark
+    if (scene.day < 0.75) {
+      const glow = (1 - scene.day) * 0.8;
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (const lx of [-38, -20, 20, 38]) {
+        const g = ctx.createRadialGradient(lx, 6, 0, lx, 6, 26);
+        g.addColorStop(0, 'rgba(255,231,170,' + (0.5 * glow).toFixed(3) + ')');
+        g.addColorStop(1, 'rgba(255,210,120,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(lx, 6, 26, 0, U.TAU); ctx.fill();
+      }
+      ctx.restore();
+    }
     ctx.restore();
   }
 
@@ -707,10 +1093,22 @@
       ctx.rect(-c.w, 0, c.w * 2, c.h * 2.2);
       ctx.clip();
       ctx.globalAlpha = c.op * 0.9;
+      // clouds take their colour from the light they are standing in: white at
+      // noon, gold at sunset, near-black under a thunderhead, and only just
+      // visible against the night sky
+      const lit = U.lerp(0.20, 1, scene.day);
+      const storm = c.storm || 0;
+      let top = mixRGB('#ffffff', '#4c5360', storm * 0.8);
+      let mid = mixRGB('#eef3fa', '#3d4450', storm * 0.8);
+      let base = mixRGB('#b9c6d8', '#252a33', storm * 0.85);
+      if (scene.dusk > 0.02) {
+        top = mixRGB(top, '#ffc489', scene.dusk * 0.7);
+        mid = mixRGB(mid, '#f0975c', scene.dusk * 0.6);
+      }
       const g = ctx.createLinearGradient(0, c.h * 0.95, 0, -c.h * 0.1);
-      g.addColorStop(0, '#ffffff');
-      g.addColorStop(0.55, '#eef3fa');
-      g.addColorStop(1, '#b9c6d8');           // shaded underside
+      g.addColorStop(0, css(shade(top, lit)));
+      g.addColorStop(0.55, css(shade(mid, lit)));
+      g.addColorStop(1, css(shade(base, lit)));           // shaded underside
       ctx.fillStyle = g;
       ctx.beginPath();
       for (const p of c.puffs) {
@@ -749,11 +1147,25 @@
     const R0 = v.radius();
     if (R0 * zoom < 1.6) return;
     const k = U.clamp(v.heatGlow / 0.6, 0, 1);
-    const sp = Math.hypot(v.vx, v.vy) || 1;
-    const ux = v.vx / sp, uy = v.vy / sp;         // the air arrives from here
-    const cx = v.x - cam.x + ux * R0 * 0.7;
-    const cy = v.y - cam.y + uy * R0 * 0.7;
-    const rr = R0 * (0.6 + 0.5 * k) * (0.94 + 0.06 * Math.sin(t * 29));
+    // the shock stands off whichever face the heat is arriving on, centred on
+    // the part meeting it rather than on the middle of the craft
+    const d = v.heatDir;
+    let ux, uy;
+    if (d) { ux = d.x; uy = d.y; }
+    else {
+      const sp = Math.hypot(v.vx, v.vy) || 1;
+      ux = v.vx / sp; uy = v.vy / sp;
+    }
+    let hit = null, lead = -Infinity, hitR = R0;
+    for (const p of v.parts) {
+      v.worldOf(p, _hw);
+      const s2 = (_hw.x - v.x) * ux + (_hw.y - v.y) * uy;
+      if (s2 > lead) { lead = s2; hit = { x: _hw.x, y: _hw.y }; hitR = Math.hypot(p.def.w, p.def.h) * 0.5; }
+    }
+    const bx = hit ? hit.x : v.x, by = hit ? hit.y : v.y;
+    const cx = bx - cam.x + ux * hitR * 0.55;
+    const cy = by - cam.y + uy * hitR * 0.55;
+    const rr = Math.max(hitR * 1.6, R0 * 0.5) * (0.75 + 0.45 * k) * (0.94 + 0.06 * Math.sin(t * 29));
     const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rr);
     g.addColorStop(0, 'rgba(255,248,232,' + (0.45 * k).toFixed(3) + ')');
     g.addColorStop(0.34, 'rgba(255,168,78,' + (0.36 * k).toFixed(3) + ')');
@@ -924,30 +1336,79 @@
     }
   };
 
+  const _hw = { x: 0, y: 0 };
+
   /**
-   * The burning trail a craft drags behind it while friction heating is
-   * cooking the hull. `k` is 0..1 hot; physics.js drives it every step.
+   * The burning trail a craft drags while it is being cooked. `k` is 0..1 hot;
+   * physics.js drives it every step and leaves the direction the heat is
+   * arriving from in `v.heatDir` (the airflow on re-entry, the Sun when you
+   * are too close to it).
+   *
+   * Embers come off the parts actually taking the heat — the ones on the
+   * windward face, weighted by how hot each has got — and stream away from the
+   * source. Spraying them from the middle of the hull instead used to put the
+   * fire down one side of the rocket regardless of which end was into the flow.
    */
   FX.reentry = function (v, k, dt) {
     const want = dt * 46 * k;
     let n = Math.floor(want);
     if (Math.random() < want - n) n++;
     if (!n) return;
-    const sp = Math.hypot(v.vx, v.vy) || 1;
-    const ux = v.vx / sp, uy = v.vy / sp;
+    const d = v.heatDir;
+    let ux, uy;
+    if (d) { ux = d.x; uy = d.y; }
+    else {
+      const sp = Math.hypot(v.vx, v.vy) || 1;
+      ux = v.vx / sp; uy = v.vy / sp;
+    }
+    const ps = v.parts;
+    if (!ps.length) return;
     const R0 = v.radius();
+
+    // how far each part sticks out toward the heat, and how hot it is
+    let lead = -Infinity;
+    for (let i = 0; i < ps.length; i++) {
+      const p = ps[i];
+      v.worldOf(p, _hw);
+      p._fxX = _hw.x; p._fxY = _hw.y;
+      p._fxLead = (_hw.x - v.x) * ux + (_hw.y - v.y) * uy;
+      if (p._fxLead > lead) lead = p._fxLead;
+    }
+    const reach = Math.max(1, R0 * 0.8);
+    let tot = 0;
+    for (let i = 0; i < ps.length; i++) {
+      const p = ps[i];
+      const face = U.clamp(1 - (lead - p._fxLead) / reach, 0, 1);
+      const hot = U.clamp(p.temp / (p.def.heatTol || 1200), 0, 1);
+      p._fxW = face * face * (0.2 + hot);
+      tot += p._fxW;
+    }
+    if (tot <= 0) return;
+
+    // the source direction in the craft's own axes, so a part's half-extent
+    // toward the heat (and across it) is exact rather than a bounding circle
+    const ca = Math.cos(v.angle), sa = Math.sin(v.angle);
+    const ulx = ux * ca + uy * sa, uly = -ux * sa + uy * ca;
+    const ax = Math.abs(ulx), ay = Math.abs(uly);
+
     for (let i = 0; i < n; i++) {
-      const j = (Math.random() - 0.5) * R0 * 1.3;
+      let r = Math.random() * tot, pick = ps[0];
+      for (let j = 0; j < ps.length; j++) { r -= ps[j]._fxW; if (r <= 0) { pick = ps[j]; break; } }
+      const w = pick.def.w, h = pick.def.h;
+      const front = 0.5 * (w * ax + h * ay);          // toward the source
+      const side = 0.5 * (w * ay + h * ax);           // across it
+      const j2 = (Math.random() - 0.5) * side * 1.9;
       const back = 30 + Math.random() * 90;
+      const sz = Math.max(0.6, Math.min(side, R0));
       push({
-        x: v.x + ux * R0 * 0.35 - uy * j,
-        y: v.y + uy * R0 * 0.35 + ux * j,
+        x: pick._fxX + ux * front * 0.9 - uy * j2,
+        y: pick._fxY + uy * front * 0.9 + ux * j2,
         // trails back through the air, so the fraction kept is of the speed
         // through the air — not of the raw heliocentric velocity
         vx: frame.x + (v.vx - frame.x) * 0.6 - ux * back,
         vy: frame.y + (v.vy - frame.y) * 0.6 - uy * back,
         life: 0, max: 0.45 + Math.random() * 1.1,
-        r0: R0 * 0.14, r1: R0 * (0.5 + Math.random() * 0.9),
+        r0: sz * 0.35, r1: sz * (1.3 + Math.random() * 2.2),
         col: Math.random() < 0.55 ? [255, 214, 138] : [255, 138, 58],
         a0: 0.55 * k, drag: 1.1, grav: 0, gdrag: 0.9, bounce: 0
       });
@@ -1467,16 +1928,32 @@
     if (cam.map) { drawMap(ctx, G, cw, ch, dpr); return; }
 
     const t = G.t;
+    const dt = G.dt > 0 ? Math.min(G.dt, 0.1) : 1 / 60;
     const v = G.focus;
     // the sky belongs to whatever world we are over — Earth's blue, Mars'
     // thin rust-coloured haze, or nothing at all above an airless rock
     const skyBody = (v && v.nearBody) || W.earth;
-    const atmoF = v ? W.atmoFrac(skyBody, v.altASL == null ? 1e9 : v.altASL) : 0;
+    const alt = v && v.altASL != null ? v.altASL : 1e9;
+    const atmoF = v ? W.atmoFrac(skyBody, alt) : 0;
 
-    drawSky(ctx, cw, ch, dpr, atmoF, skyBody);
+    // Where we are standing, in the local sense: which longitude the craft is
+    // over decides what time of day it is down there and what the weather is
+    // doing. Everything drawn this frame reads it off `scene`.
+    const sbp = W.bodyPos(skyBody, t);
+    const th = v ? Math.atan2(v.y - sbp.y, v.x - sbp.x) : 0;
+    const el = skyBody.spin ? W.sunHeight(skyBody, th, t) : 1;
+    scene.day = skyBody.spin ? W.daylight(skyBody, th, t) : 1;
+    scene.dusk = Math.exp(-Math.pow((el - 0.02) / 0.22, 2));
+    scene.wx = W.weather(skyBody, th, t);
+
+    drawSky(ctx, cw, ch, dpr, atmoF, skyBody, th, t);
     // stars come out to match the darkening sky above, rather than staying
-    // hidden until the very top of the atmosphere
-    drawStars(ctx, cw, ch, dpr, U.clamp(1 - Math.pow(atmoF, 1.7) * 1.25, 0, 1), t, cam.rot);
+    // hidden until the very top of the atmosphere — and they are out at night
+    // from the ground too, as long as the cloud lets them through
+    const nightStars = (1 - scene.day) * U.clamp(1 - scene.wx.cover * 1.25, 0, 1) * 0.95;
+    drawStars(ctx, cw, ch, dpr,
+      Math.max(U.clamp(1 - Math.pow(atmoF, 1.7) * 1.25, 0, 1), nightStars), t, cam.rot);
+    drawSunInSky(ctx, cw, ch, dpr, skyBody, th, t, atmoF);
 
     setWorldTf(ctx, cw, ch, dpr, cam.zoom, cam.rot);
     const viewR = R.viewR(cw, ch);
@@ -1488,6 +1965,9 @@
     FX.draw(ctx, cam.zoom, viewR);
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // weather in front of everything: you are flying through it, not past it
+    drawPrecip(ctx, cw, ch, dpr, t, dt, alt, (v && v.windSpd) || 0);
+    drawLightning(ctx, cw, ch, dpr, dt, alt);
     drawVelocityMarker(ctx, cw, ch, dpr, G);
   };
 
