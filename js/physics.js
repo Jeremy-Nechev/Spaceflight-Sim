@@ -1,5 +1,5 @@
 /* ============================================================
-   physics.js — one simulation step for every live vessel
+   physics.js: one simulation step for every live vessel
    ------------------------------------------------------------
    Forces: gravity (every world), engine thrust with gimbal,
            atmospheric drag + weathervaning, parachutes,
@@ -13,7 +13,7 @@
   const W = S.world;
   const PH = S.physics = {};
 
-  const DRAG_K = 0.5;        // global aero fudge — keeps ascents forgiving
+  const DRAG_K = 0.5;        // global aero fudge, keeps ascents forgiving
   const RHO_W = 1000;        // water density
   const CONTACT_K = 420;     // contact spring, per kg
   const CONTACT_C = 42;      // contact damper, per kg
@@ -24,7 +24,7 @@
   // How much of the cross-flow restoring torque is applied. At full strength it
   // reaches ~500 kN·m at max q, which buries the ~150 kN·m the wheels and
   // gimbal can muster and leaves the craft unable to turn during the gravity
-  // turn. The drag *force* is unscaled, so ascent losses stay honest — only the
+  // turn. The drag *force* is unscaled, so ascent losses stay honest; only the
   // weathervaning moment is softened, and fins still point the nose forward.
   const AERO_TQ = 0.30;
 
@@ -45,17 +45,17 @@
   // harmless 2%, half that distance is uncomfortable, a tenth of it cooks
   // anything unshielded, and skimming the surface is measured in seconds.
   const SUN_HEAT = 1.64e14;
-  // A firing engine also cooks whatever's nearby that isn't its own stage —
+  // A firing engine also cooks whatever's nearby that isn't its own stage:
   // clustered boosters and tanks mounted close to somebody else's engine are a
   // real risk, not a free lunch. Inverse-square from the nozzle, scaled by the
   // engine's actual delivered thrust. Tuned so the stock Atlas II's SRBs (a
   // 380 kN solid booster, its own centre about 5 m from the core tank) stay a
   // safe, mildly-warm ~15% through their whole ~70 s burn, while anything
-  // clipped in close — under about 2 m from a large engine — cooks through in
+  // clipped in close, under about 2 m from a large engine, cooks through in
   // well under a minute.
   const ENGINE_HEAT_K = 8e-7;
-  const ENGINE_HEAT_REACH = 12;      // metres — ignore anything farther off
-  const ENGINE_HEAT_MIN_D = 0.5;     // metres — floor, so point-blank can't divide by ~0
+  const ENGINE_HEAT_REACH = 12;      // metres, ignore anything farther off
+  const ENGINE_HEAT_MIN_D = 0.5;     // metres, a floor so point-blank can't divide by ~0
 
   const _g = { x: 0, y: 0 };
   const _wp = { x: 0, y: 0 };
@@ -110,8 +110,8 @@
   function scenMass(o) { return o.w * o.h * (SCEN_DENSITY[o.type] || 60); }
 
   /** body whose surface we are closest to. Compares against the sphere rather
-      than the true terrain — a few km of hills never decides which *world* is
-      nearest, and this runs for every craft every step */
+      than the true terrain, since a few km of hills never decides which
+      *world* is nearest, and this runs for every craft every step */
   function nearestBody(x, y, t) {
     let best = null, bestAlt = Infinity;
     for (const b of W.bodies) {
@@ -136,7 +136,7 @@
   };
 
   const coastWreck = PH.driftWreck = function (v, dt, t) {
-    // A wreck is not flown any more — the camera parks on it for five seconds
+    // A wreck is not flown any more; the camera parks on it for five seconds
     // while the fireball burns. So all it has to do is stay where the craft
     // died *relative to the world*, which was free back when the world stood
     // still and now means travelling along with it. Coasting on its last
@@ -290,15 +290,15 @@
     const near = nearestBody(v.x, v.y, t);      // whose ground we could hit
     const ref = W.soiBody(v.x, v.y, t);         // whose gravity we are orbiting
     const gi = W.groundInfo(near, v.x, v.y, t);      // used by the ground-contact
-    // section below too — nothing moves between here and there, so one query does
-    // air belongs to whichever world we are over, not to Earth — Mars has its
+    // section below too, since nothing moves between here and there, so one query does
+    // air belongs to whichever world we are over, not to Earth: Mars has its
     // own (very thin) sky, and the Moon and Kore have none at all
     const altASL = W.altitudeASL(near, v.x, v.y, t);
     const rho = W.density(near, altASL);
     const atmoF = near.atmo ? rho / near.atmo.rho0 : 0;
 
     const nose = v.noseDir();
-    // velocity through the air, which travels with the world it belongs to —
+    // velocity through the air, which travels with the world it belongs to,
     // and, inside the weather layer, blows about on top of that
     const airV = W.bodyVel(near, t);
     let avx = v.vx - airV.x, avy = v.vy - airV.y;
@@ -329,7 +329,7 @@
         // actually orbiting, not against the origin. Near Earth the two agree
         // (Earth doesn't move), but the Moon travels at ~470 m/s, so out there
         // the absolute velocity points somewhere quite different from the
-        // direction of travel — which is why the nose used to settle well off
+        // direction of travel, which is why the nose used to settle well off
         // prograde once you left Earth's neighbourhood. The frame is the
         // *sphere of influence*, not the nearest surface: those two disagree
         // across a wide band around the Moon, and it is the dominant gravity
@@ -405,14 +405,14 @@
       const q = 0.5 * rho * airSpd * airSpd;
 
       // axial drag, straight through the centre of mass
-      // rain and snow are extra mass in the airstream — a modest penalty, but
+      // rain and snow are extra mass in the airstream: a modest penalty, but
       // enough that a launch into a downpour climbs a little more slowly
       const wet = 1 + 0.16 * wxRain;
       const cdAx = (vAx > 0 ? A.cdFwd : A.cdBack) * wet;
       const fAx = 0.5 * rho * vAx * Math.abs(vAx) * cdAx * A.areaAx * DRAG_K;
       Fx -= nose.x * fAx; Fy -= nose.y * fAx;
 
-      // cross-flow drag part by part — this is what makes fins work
+      // cross-flow drag part by part, which is what makes fins work
       const lvx = avx - nose.x * vAx, lvy = avy - nose.y * vAx;
       const lSpd = Math.hypot(lvx, lvy);
       if (lSpd > 0.05) {
@@ -427,7 +427,7 @@
           Tq += ((_wp.x - v.x) * fy - (_wp.y - v.y) * fx) * AERO_TQ;
         }
       }
-      // rotational damping from cross-flow — kept light so the craft stays
+      // rotational damping from cross-flow, kept light so the craft stays
       // steerable at max q; the per-part cross-flow above still weathervanes it
       Tq -= 0.5 * rho * airSpd * v.omega * A.damp * DRAG_K * 0.3;
 
@@ -503,7 +503,7 @@
     // This runs *after* the integrate block, so its embers and burn-off puffs
     // are placed at the end-of-step position and are born at the end-of-step
     // clock. Stamping them with `t` like everything above meant the renderer
-    // then advanced them by one extra sub-step — and since a particle carries
+    // then advanced them by one extra sub-step, and since a particle carries
     // its planet's orbital velocity, over Earth that put the heat trail a
     // clean 17 m (2 km/s × 1/120 s) up-track of the hull it came off.
     if (S.fx) S.fx.clock = t + dt;
@@ -516,7 +516,7 @@
    * Every part carries its own accumulated heat. The parts actually facing the
    * airflow take the brunt of it; anything tucked behind another part takes a
    * fraction, and anything hiding behind a heat shield takes almost none. Run
-   * a part past its tolerance and it burns away — and if that was the last
+   * a part past its tolerance and it burns away, and if that was the last
    * command pod, the craft is lost with it.
    */
   function applyHeat(v, rho, avx, avy, dt, t) {
@@ -525,7 +525,7 @@
     const speed = Math.hypot(avx, avy);
     const flux = (rho > 1e-7 && speed > 40) ? rho * speed * speed * speed * HEAT_K : 0;
 
-    // Sunlight, falling off as 1/r², poured into the very same accumulator —
+    // Sunlight, falling off as 1/r², poured into the very same accumulator,
     // so a heat shield held between the craft and the Sun shades what's behind
     // it exactly as it does on the way through an atmosphere.
     const sp = W.bodyPos(W.sun, t == null ? W.t : t);
@@ -536,7 +536,7 @@
     // are headed) and from wherever the Sun happens to be
     if (flux > 0) heatFrom(ps, v.com, v.angle, flux, avx, avy, dt);
     if (sunFlux > 2e-5) heatFrom(ps, v.com, v.angle, sunFlux, sdx, sdy, dt);
-    // remember which of the two is doing the damage, so the obituary is right —
+    // remember which of the two is doing the damage, so the obituary is right,
     // and which way it is arriving from, so the glow and the trail come off the
     // face that is actually being cooked rather than off the nose by default
     const bySun = sunFlux > flux;
@@ -554,7 +554,7 @@
       if (f > worst) worst = f;
       if (p.temp > hottest) hottest = p.temp;
       // A part that a nearby engine has been cooking this step is marked
-      // before we get here (see engineHeat) — catch that before it's cleared,
+      // before we get here (see engineHeat), so catch that before it's cleared,
       // so a tank an engine cooked through in vacuum, nowhere near the Sun or
       // any air, doesn't get blamed on either of them in the obituary.
       if (f >= 1) { p._burnCause = p._engineHot ? 'engine' : v.cookedBy; (cooked = cooked || []).push(p); }
@@ -563,12 +563,12 @@
     v.heatFrac = worst;
     v.heatGlow = hottest;
     // Embers stream off the hull because air is tearing past it, so the trail
-    // belongs to the airflow — and only when the air is what is doing the
+    // belongs to the airflow, and only when the air is what is doing the
     // cooking. Steering it by the dominant heat source instead put the trail
     // on the sunward face of a craft that was merely coasting in sunlight,
     // which read as smoke pouring off the top of the rocket.
     // (a third of the solar flux is enough to count as "the air is doing this"
-    // — it keeps the trail appearing as high up as it always did, while a
+    // that keeps the trail appearing as high up as it always did, while a
     // craft merely sunbathing in thin air gets none)
     if (flux > sunFlux * 0.35 && hottest > 0.08 && S.fx) {
       S.fx.reentry(v, U.clamp(hottest / 0.6, 0, 1), dt, avx, avy);
@@ -578,9 +578,9 @@
 
   /**
    * A firing engine radiates heat into any fuel tank nearby that isn't part
-   * of its own stage. "Its own stage" is whatever shares its rigid component —
+   * of its own stage. "Its own stage" is whatever shares its rigid component:
    * the same continuous structure the graph in rebuildGraph() already
-   * separates at every separator — so an engine never cooks the tank sitting
+   * separates at every separator, so an engine never cooks the tank sitting
    * directly on top of it (completely normal and expected) but a strap-on
    * booster's engine absolutely can cook the tank of the stage it's clamped
    * beside, or vice versa, if they're mounted close enough for long enough.
@@ -635,7 +635,7 @@
   /** a part cooks off: it is gone, and losing the last pod takes the craft */
   function burnOff(v, p) {
     const podsLeft = v.parts.some(q => q !== p && q.def.type === 'pod');
-    const cause = p._burnCause;      // 'engine' | 'sun' | 'air' — see applyHeat
+    const cause = p._burnCause;      // 'engine' | 'sun' | 'air', see applyHeat
     v.worldOf(p, _wp);
     const i = v.parts.indexOf(p);
     if (i >= 0) v.parts.splice(i, 1);
@@ -840,7 +840,7 @@
 
   /* ═══════════════════ on-rails advance (high time warp) ═══════════════════ */
 
-  /** one velocity-Verlet gravity step — no aero, no contact */
+  /** one velocity-Verlet gravity step, no aero, no contact */
   function coastStep(v, h, t) {
     W.gravity(v.x, v.y, t, _g);
     const ax = _g.x, ay = _g.y;
@@ -869,7 +869,7 @@
    * Rails advance for the whole fleet at once.
    *
    * A warp substep can be minutes long, which moves a craft hundreds of
-   * kilometres — far too coarse for the hull-level contact test used at 1×, so
+   * kilometres, far too coarse for the hull-level contact test used at 1×, so
    * craft used to sail straight through each other (and through worlds) the
    * moment the clock was wound forward. Collisions here are *swept* instead:
    * two craft touch if the closest approach of their two motion segments falls

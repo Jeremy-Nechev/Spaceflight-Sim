@@ -1,5 +1,5 @@
 /* ============================================================
-   audio.js — tiny WebAudio engine rumble, one-shot effects and
+   audio.js: tiny WebAudio engine rumble, one-shot effects and
               a generative ambient score
    ============================================================ */
 (function (S) {
@@ -118,7 +118,7 @@
      the whole thing sits far enough back that the engines and the HUD chirps
      still read over it. It ducks itself while a motor is burning. */
 
-  const ROOT = 146.83;                       // D3 — low enough to sit under everything
+  const ROOT = 146.83;                       // D3, low enough to sit under everything
   // semitone offsets: a slow four-chord turn round D minor, each voiced wide
   const CHORDS = [[0, 7, 15], [-4, 3, 12], [-7, 5, 10], [-2, 5, 14]];
   const BELLS = [12, 15, 19, 22, 24, 27, 31];    // minor-pentatonic degrees, up high

@@ -1,5 +1,5 @@
 /* ============================================================
-   vessel.js — rigid-body craft assembled from parts,
+   vessel.js: rigid-body craft assembled from parts,
                fuel compartments, stage groups and separation
    ------------------------------------------------------------
    Vessel local space: +y toward the nose, +x right.
@@ -82,7 +82,7 @@
 
   /* ═══════════════════ live-flight state (save/resume) ═══════════════════
      Unlike a blueprint, this captures a vessel exactly as it sits mid-flight:
-     position/velocity, per-part fuel/activation, and which stage it's on —
+     position/velocity, per-part fuel/activation, and which stage it's on,
      everything needed to pick a paused mission back up unchanged. */
 
   V.toState = function (v) {
@@ -106,7 +106,7 @@
     const parts = [];
     for (const s of st.parts) {
       const p = mkPart(s);
-      if (!p) continue;                 // unknown/removed part id — skip, same as fromBlueprint
+      if (!p) continue;                 // unknown/removed part id, so skip, same as fromBlueprint
       p.fuel = s.fuel; p.active = !!s.active; p.fired = !!s.fired;
       p.chute = s.chute || 0; p.chuteOut = !!s.chuteOut; p.deployed = !!s.deployed;
       p.temp = s.temp || 0; p.cut = !!s.cut;
@@ -318,8 +318,8 @@
 
   /**
    * Every in-line separator grows a shroud automatically: a smooth casing that
-   * reaches up from the separator over whatever the stage above tucks inside it
-   * — its engine, normally — and stops where the stack goes back to being a
+   * reaches up from the separator over whatever the stage above tucks inside
+   * it (its engine, normally) and stops where the stack goes back to being a
    * tank, a pod or full width again. That is what an interstage is, and it
    * means the vacuum engine of an upper stage is no longer flown through the
    * airstream as a bare nozzle.
@@ -341,7 +341,7 @@
       const base = s.ly + s.def.h / 2;
 
       // everything stacked above it whose width overlaps the casing at all,
-      // lowest first — anything that doesn't fit inside is what stops it
+      // lowest first; anything that doesn't fit inside is what stops it
       const above = parts.filter(p => p !== s && p.ly > s.ly &&
         Math.abs(p.lx - s.lx) < hw + p.def.w / 2 - 0.02).sort((a, b) => a.ly - b.ly);
 
@@ -353,7 +353,7 @@
         // grid step out is still the same stack
         if (lo > reach + 0.3) break;
         // a tank, a pod, a parachute or anything as wide as the separator is
-        // the stage proper — the shroud ends underneath it
+        // the stage proper, so the shroud ends underneath it
         const body = p.def.fuel > 0 || p.def.type === 'pod' || p.def.chute;
         if (body || !tucked(p, s.lx, hw)) { blocked = p; break; }
         inside.push(p);
@@ -366,7 +366,7 @@
       // Wrap onto whatever it meets: the casing tapers from the separator's
       // width up to the width of the part it butts against, so the profile
       // steps down in one clean slope instead of a cylinder ending in a ledge.
-      // Never wider at the top than at the bottom — a shroud that flared out
+      // Never wider at the top than at the bottom, since a shroud that flared out
       // past its own separator would be presenting frontal area the drag model
       // doesn't know about.
       const topW = blocked ? Math.min(s.def.w, blocked.def.w) : s.def.w;
@@ -407,7 +407,7 @@
   };
 
   /**
-   * Per-compartment fuel breakdown for the HUD — one entry per physically
+   * Per-compartment fuel breakdown for the HUD: one entry per physically
    * isolated tank group (a separator walls compartments off from each
    * other, same as `rebuildGraph`), including a solid motor's own charge,
    * which `fuelIn` deliberately leaves out since engines can't draw on it.
@@ -452,7 +452,7 @@
     return n;
   };
 
-  /** touchdown speed the craft walks away from — a capsule under a canopy
+  /** touchdown speed the craft walks away from: a capsule under a canopy
       arrives at roughly 9 m/s, so bare hulls must survive a little more */
   Vessel.prototype.crashSpeed = function () {
     const l = this.legCount();
@@ -495,12 +495,12 @@
     }
     if (!list.length) return 0;
 
-    // Sum every propellant source this stage actually draws on — solids by
-    // their own part, liquids once per compartment — and weight Isp by
+    // Sum every propellant source this stage actually draws on: solids by
+    // their own part, liquids once per compartment, then weight Isp by
     // thrust. Using only a single engine's tank here (as this used to) while
     // `this.mass` also falls as a *different* engine (e.g. a solid booster
     // burning alongside a liquid sustainer) burns its own separate fuel made
-    // the ratio grow even though nothing was being added back — Δv would
+    // the ratio grow even though nothing was being added back, so Δv would
     // visibly climb while the untracked engine burned down.
     let fuel = 0, thrust = 0, flow = 0;
     const seenComp = new Set();
@@ -520,7 +520,7 @@
     return isp * U.G0 * Math.log(this.mass / Math.max(1, this.mass - fuel));
   };
 
-  /** world-space corners of every part — used for terrain and scenery contact */
+  /** world-space corners of every part, used for terrain and scenery contact */
   Vessel.prototype.contactPoints = function (out) {
     out = out || [];
     out.length = 0;

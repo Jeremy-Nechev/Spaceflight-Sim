@@ -1,5 +1,5 @@
 /* ============================================================
-   builder.js — the vehicle assembly hangar
+   builder.js: the vehicle assembly hangar
    ------------------------------------------------------------
    Blueprint space: +y up, origin at the pad surface (y = 0).
    ============================================================ */
@@ -15,7 +15,7 @@
   B.parts = [];
   B.stages = [];
   B.mirror = true;
-  B.held = null;          // { def, flip, uid? }  — following the pointer
+  B.held = null;          // { def, flip, uid? }, following the pointer
   B.sel = null;           // selected placed part
   B.chip = null;          // uid picked up inside the staging editor
   B.cat = 'Command';
@@ -156,7 +156,7 @@
         const d = Math.hypot(c.x - mx, c.y - my);
         if (d >= thr || d >= best) continue;
         // A side node taken from a narrow part can sit inside a wider one
-        // alongside it — that welds boosters to the tank so they never release.
+        // alongside it, and that welds boosters to the tank so they never release.
         if (overlaps(def, c.x, c.y, exclude)) continue;
         best = d; bx = c.x; by = c.y; bflip = c.f;
       }
@@ -187,7 +187,7 @@
     if (B.mirror && h.def.radial && Math.abs(sn.x) > 0.15) {
       added.push(place(h.def, -sn.x, sn.y, -sn.flip));
     }
-    // every new stageable part joins a group — including the mirrored twin,
+    // every new stageable part joins a group, including the mirrored twin,
     // which used to be left out and so would never fire
     autoAssign(added.filter(stageable));
     B.held = null;
@@ -216,7 +216,7 @@
       });
       if (best >= 0 && bestD < TOL) { B.stages[best].push(p.uid); continue; }
 
-      // no home for it — insert a new group at the right point in the order
+      // no home for it, so insert a new group at the right point in the order
       let at = B.stages.length;
       for (let i = 0; i < B.stages.length; i++) {
         if (S.vessel.groupKey(B.parts, B.stages[i]).y > y) { at = i; break; }
@@ -315,9 +315,9 @@
   B.paintable = p => !!p && p.def.type === 'tank';
 
   /**
-   * Paint the selected tank, or every tank on the rocket when `all` is set —
-   * clicking through thirty tanks one at a time to get a uniform stack is not
-   * a design decision, it's an errand.
+   * Paint the selected tank, or every tank on the rocket when `all` is set,
+   * since clicking through thirty tanks one at a time to get a uniform stack
+   * is not a design decision, it's an errand.
    */
   B.setColor = function (col, all) {
     const list = all ? B.parts.filter(B.paintable) : (B.paintable(B.sel) ? [B.sel] : []);
@@ -377,7 +377,7 @@
     }
   };
 
-  /** true while a placed part is being held over the catalog panel — releasing it there deletes it */
+  /** true while a placed part is being held over the catalog panel: releasing it there deletes it */
   B.isGrabbing = function () { return !!pointer.grab; };
 
   B.pointerMove = function (sx, sy, overPalette) {
@@ -390,7 +390,7 @@
 
     if (pointer.grab) {
       pointer.overPalette = !!overPalette;
-      if (pointer.overPalette) return;   // hovering the catalog — releasing here deletes the part instead of placing it
+      if (pointer.overPalette) return;   // hovering the catalog, so releasing here deletes the part instead of placing it
       if (!pointer.moved) { pushUndo(); pointer.moved = true; }
       const sn = snapFor(pointer.grab.def, w.x - pointer.grabDX, w.y - pointer.grabDY, pointer.grab);
       pointer.grab.lx = sn.x;
@@ -404,7 +404,7 @@
 
   B.pointerUp = function () {
     if (pointer.grab && pointer.overPalette) {
-      B.remove(pointer.grab);          // dropped back into the catalog — discard it
+      B.remove(pointer.grab);          // dropped back into the catalog, so discard it
     } else if (pointer.moved) {
       B.changed();
     }
@@ -463,7 +463,7 @@
       ctx.restore();
     }
 
-    // the shrouds the separators will fly with — shown here so the hangar
+    // the shrouds the separators will fly with, shown here so the hangar
     // matches what launches (see V.shroudsFor)
     for (const sh of S.vessel.shroudsFor(B.parts)) {
       ctx.save();

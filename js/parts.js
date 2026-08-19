@@ -1,5 +1,5 @@
 /* ============================================================
-   parts.js — rocket part catalogue + part artwork
+   parts.js: rocket part catalogue + part artwork
    ------------------------------------------------------------
    Part local space: origin at the part centre,
                      +y points toward the nose, +x to the right.
@@ -395,7 +395,7 @@
   }
 
   /**
-   * Ablative heat shield — a shallow dish that takes the friction heating on
+   * Ablative heat shield: a shallow dish that takes the friction heating on
    * its own face so the stack behind it doesn't. The exposed side chars and
    * then glows as it soaks up heat (see `st.temp`, kept by physics.js).
    */
@@ -429,7 +429,7 @@
     band(ctx, w, h / 2 - 0.07, 0.14);
   }
 
-  /** vertical coupler — in-line truss that rigidly joins two stacks */
+  /** vertical coupler: in-line truss that rigidly joins two stacks */
   function drawVCoup(ctx, st, d) {
     const w = d.w, h = d.h, pt = h * 0.24;
     ctx.fillStyle = cyl(ctx, w, METAL_L, METAL_M, METAL_D);
@@ -453,7 +453,7 @@
     ctx.beginPath(); ctx.rect(-w / 2, -h / 2, w, pt); ink(ctx, w);
   }
 
-  /** linear coupler — sideways truss beam bridging two parallel stacks */
+  /** linear coupler: sideways truss beam bridging two parallel stacks */
   function drawLCoup(ctx, st, d) {
     const w = d.w, h = d.h, pt = w * 0.13;
     ctx.fillStyle = '#7d848e';
@@ -474,7 +474,7 @@
     ctx.beginPath(); ctx.rect(w / 2 - pt, -h / 2, pt, h); ink(ctx, h);
   }
 
-  /** bi-coupler — one stack below splits into two side-by-side stacks above */
+  /** bi-coupler: one stack below splits into two side-by-side stacks above */
   function drawBiCoup(ctx, st, d) {
     const w = d.w, h = d.h, tw = w / 2, dx = w / 4;
     ctx.beginPath();
@@ -551,7 +551,7 @@
   add({ id: 'tank_l1', name: 'Tank L', cat: 'Tanks', type: 'tank', w: 4, h: 6, mass: 1500, fuel: 22000, draw: drawTank, desc: 'Large core tank.' });
   add({ id: 'tank_l2', name: 'Tank L Long', cat: 'Tanks', type: 'tank', w: 4, h: 10, mass: 2500, fuel: 38000, draw: drawTank, desc: 'Large tank, double length.' });
 
-  /* Tapered tanks — narrow at the top so the next size down (or a pod) sits
+  /* Tapered tanks: narrow at the top so the next size down (or a pod) sits
      flush without spending a part on a separate adapter. They hold less than
      a straight tank of the same height because the cone has less volume. */
   add({

@@ -1,5 +1,5 @@
 /* ============================================================
-   main.js — canvas, game loop, scene switching and all UI wiring
+   main.js: canvas, game loop, scene switching and all UI wiring
    ============================================================ */
 (function (S) {
   'use strict';
@@ -38,7 +38,7 @@
     B.load(saved || B.presets()[0]);
     renderProgress();
 
-    // resume a paused game if one exists — stay on the menu either way, so
+    // resume a paused game if one exists, but stay on the menu either way, so
     // the player picks which mission (if more than one) to jump back into
     // via the mission bar rather than being dropped straight into flight
     F.loadGame();
@@ -78,7 +78,7 @@
 
   /* ═══════════════════ mission bar (VAB/menu) ═══════════════════
      A minimal readout of every active, tagged mission so the player can jump
-     back into a specific background flight from the VAB or main menu — the
+     back into a specific background flight from the VAB or main menu, the
      only new UI surface requirement 3 needs. */
 
   function hideMissionBar() {
@@ -90,7 +90,7 @@
   // Scrapping a craft that is still flying takes a confirming second click;
   // the widget repaints itself twice a second, so which button is armed has to
   // live out here rather than on the button element itself. Keyed on the
-  // vessel itself — mission ids are not guaranteed unique across a resumed
+  // vessel itself, since mission ids are not guaranteed unique across a resumed
   // save, and keying on those armed every row that shared an id.
   let armedRecover = null, armedUntil = 0;
 
@@ -136,7 +136,7 @@
       rec.textContent = armed ? 'Sure?' : (home ? '✔ Recover' : '✖ Scrap');
       rec.title = home
         ? 'Bring ' + (v.mission.name || 'this craft') + ' home and close the mission'
-        : 'This craft is still flying — scrapping it ends the mission';
+        : 'This craft is still flying, so scrapping it ends the mission';
       rec.onclick = () => {
         if (S.audio) S.audio.ui();
         if (!home && !armed) {
@@ -167,7 +167,7 @@
     if (!last || dt > 0.25 || dt <= 0) dt = 1 / 60;
     last = now;
 
-    // simulation always runs — a launched craft keeps flying whether the
+    // simulation always runs, since a launched craft keeps flying whether the
     // player is looking at the flight scene, the VAB, or the menu. Only
     // rendering (and the HUD/audio F.update itself gates internally) is
     // scene-dependent.
@@ -183,7 +183,7 @@
       B.draw(ctx, cw, ch, dpr);
       // rebuilding the mission bar's DOM every frame tears down whatever the
       // player is about to click (buttons go stale mid-click) for no visible
-      // benefit — a few times a second is plenty to keep it live
+      // benefit, since a few times a second is plenty to keep it live
       paintTankPaint(false);
       missionBarTimer -= dt;
       if (missionBarTimer <= 0) { paintMissionBar(); paintSiteInfo(); missionBarTimer = 0.5; }
@@ -422,7 +422,7 @@
   }
 
   /**
-   * The launch-site picker, plus a line of local conditions underneath it —
+   * The launch-site picker, plus a line of local conditions underneath it:
    * the same time of day and weather the craft will meet on the pad, so the
    * player can see they are about to launch into a gale at two in the morning.
    */
@@ -604,8 +604,8 @@
   }
 
   /* ═══════════════════ vessel chip (map view) ═══════════════════
-     Clicking another craft on the map is ambiguous — switch to flying it, or
-     aim a rendezvous at it? — so a click just opens this small chip with both
+     Clicking another craft on the map is ambiguous: switch to flying it, or
+     aim a rendezvous at it? So a click just opens this small chip with both
      options spelled out, rather than guessing from the gesture. */
 
   function showVesselChip(ves, x, y) {
@@ -656,7 +656,7 @@
 
   /* ═══════════════════ part chip (close-up flight view) ═══════════════════
      Clicking a part of the craft you're flying opens the handful of things you
-     can do to it by hand. Right now that's cutting a parachute loose — worth
+     can do to it by hand. Right now that's cutting a parachute loose, worth
      having the moment you're down, since a canopy still pulling will drag a
      lander over. */
 
@@ -676,7 +676,7 @@
     const btn = document.createElement('button');
     btn.textContent = '✂ Cut parachute';
     btn.disabled = !out;
-    btn.title = out ? 'Release the canopy' : 'Nothing to cut — this one is still packed';
+    btn.title = out ? 'Release the canopy' : 'Nothing to cut: this one is still packed';
     btn.onclick = () => { F.cutChute(ves, part); hideVesselChip(); };
     chip.appendChild(btn);
 
@@ -780,8 +780,8 @@
         document.getElementById('palette').classList.remove('dropTarget');
       }
       // A click (not a drag) in map view either opens the chip for a craft
-      // under the cursor (switch focus / set as rendezvous target), or —
-      // failing that — plans a route to whatever world is under it. Close up,
+      // under the cursor (switch focus / set as rendezvous target), or,
+      // failing that, plans a route to whatever world is under it. Close up,
       // the same click picks a part of the craft you're flying.
       if (scene === 'flight' && clickAt && e.button !== 2) {
         const moved = Math.hypot(e.clientX - clickAt.x, e.clientY - clickAt.y);

@@ -1,5 +1,5 @@
 /* ============================================================
-   world.js — planets, terrain, oceans, scenery, clouds,
+   world.js: planets, terrain, oceans, scenery, clouds,
               atmosphere, orbital maths and trajectory prediction
    ------------------------------------------------------------
    World space: metres, +x right, +y up, the Sun at (0,0);
@@ -14,7 +14,7 @@
   /* ═══════════════════ bodies ═══════════════════
      A small solar system: the Sun at the origin, Earth and Mars going round
      it, and a moon apiece. Distances and masses are picked so the trips are
-     recognisable but playable — a year lasts a week and a half, an Earth→Mars
+     recognisable but playable: a year lasts a week and a half, an Earth→Mars
      window comes round every 24 days, and the crossing takes eight. */
 
   const SUN = {
@@ -46,7 +46,7 @@
     cont: [[1500, 2, 1.1], [950, 3, 2.6], [520, 5, -1.0], [260, 7, 0.4]],
     detail: [[300, 17, 1.0], [150, 41, 2.0], [80, 97, 0.5]],
     contOrigin: Math.PI / 2,
-    // a wide, gentle blend — a narrow one leaves a ring of cliffs round the pad
+    // a wide, gentle blend, since a narrow one leaves a ring of cliffs round the pad
     pad: { theta: Math.PI / 2, width: 0.011 },
     padClear: 0.0024,
     col: {
@@ -124,7 +124,7 @@
     orbit: { parent: 'sun', a: 4.90e8, phase0: 2.4 }
   };
 
-  /** Mars' little captured rock — barely any gravity, easy to land on */
+  /** Mars' little captured rock: barely any gravity, easy to land on */
   const KORE = {
     id: 'kore', name: 'Kore', seed: 24601,
     radius: 40000,
@@ -179,7 +179,7 @@
   // W.soiBody has to test the innermost claim before the outer one
   const SOI_ORDER = W.bodies.filter(b => b.soi).sort((a, b) => a.soi - b.soi);
 
-  /** how far out the system goes — used to call a trajectory "escaped" */
+  /** how far out the system goes, used to call a trajectory "escaped" */
   W.systemR = MARS.orbit.a * 2.6;
 
   /** scenery the player has already flattened */
@@ -190,7 +190,7 @@
 
   /**
    * Where a body is, in world (Sun-centred) coordinates. Moons ride on their
-   * planet, so this walks up the chain — and because gravity asks for the same
+   * planet, so this walks up the chain, and because gravity asks for the same
    * body at the same instant over and over, each answer is memoised against
    * the time it was worked out for.
    *
@@ -253,7 +253,7 @@
 
   /**
    * Distance of the planet's surface from its centre at polar angle th.
-   * `dth` is the angular spacing the caller is sampling at — pass it when
+   * `dth` is the angular spacing the caller is sampling at; pass it when
    * drawing so detail can be band-limited; omit it (physics, collision) to get
    * the true, full-detail surface.
    */
@@ -261,7 +261,7 @@
     const lim = dth > 0 ? Math.PI / (dth * 3) : 0;
     let h = b.radius + continents(b, th) + detailOf(b, th, lim);
     // blend to a dead-flat plateau under every launch complex. `flat` is
-    // precomputed per site (see resolveSites) — this runs on every physics
+    // precomputed per site (see resolveSites), since this runs on every physics
     // step and every terrain sample the renderer takes.
     const sites = b.sites;
     if (sites) {
@@ -312,15 +312,15 @@
     return b.atmo.rho0 * Math.exp(-Math.max(0, altASL) / b.atmo.scaleH);
   };
 
-  /** 0..1 — how deep in the atmosphere we are, for sky colour + audio */
+  /** 0..1, how deep in the atmosphere we are, for sky colour + audio */
   W.atmoFrac = function (b, altASL) {
     if (!b.atmo) return 0;
     return U.clamp(1 - altASL / b.atmo.height, 0, 1);
   };
 
   /* ═══════════════════ time of day ═══════════════════
-     The ground is fixed in world coordinates — the pad, the collision tests,
-     every trajectory that ends at a landing site depends on that — so a day
+     The ground is fixed in world coordinates: the pad, the collision tests,
+     every trajectory that ends at a landing site depends on that, so a day
      is modelled as the sunlight sweeping round the globe rather than the globe
      turning under it. Everything a player can see is the same either way: each
      longitude gets its own dawn, noon, dusk and midnight, in that order, once
@@ -343,7 +343,7 @@
     return U.clamp((W.sunHeight(b, th, t) + 0.10) / 0.26, 0, 1);
   };
 
-  /** local solar time in hours, 0..24 — noon is the sun overhead */
+  /** local solar time in hours, 0..24; noon is the sun overhead */
   W.localHours = function (b, th, t) {
     const h = U.wrap(th - W.sunAngle(b, t));
     return (24 + 12 - (h * 12) / Math.PI) % 24;
@@ -396,7 +396,7 @@
 
   /**
    * The biome at angle `th`. Pass `gr` (the terrain radius) when the caller
-   * already has it — drawing the surface asks for a biome at every sample
+   * already has it: drawing the surface asks for a biome at every sample
    * point, and terrain() is the expensive half of the answer.
    * Returns null on worlds that have no biomes (everywhere but Earth).
    */
@@ -434,7 +434,7 @@
      Weather fronts drift round the planet and evolve as they go. Everything is
      built from a handful of integer harmonics in longitude, each turning at
      its own rate, so the field is smooth, seamless, and repeatable from the
-     clock alone — no state to save, and a forecast is just the same call with
+     clock alone: no state to save, and a forecast is just the same call with
      a later `t`. */
 
   const WX_HARM = [
@@ -453,7 +453,7 @@
     return 0.5 + 0.5 * (sum / tot);
   }
 
-  /** ground temperature in °C — biome, height, time of day and the odd cold snap */
+  /** ground temperature in °C: biome, height, time of day and the odd cold snap */
   W.surfaceTemp = function (b, th, t, bio, gr) {
     if (!b.atmo) return -140;
     bio = bio || W.biome(b, th, gr) || 'plains';
@@ -473,7 +473,7 @@
   /**
    * Conditions over a place. Cached on a coarse grid (a few hundred metres of
    * arc, a few seconds of clock) because the physics asks a hundred times a
-   * second and none of this changes that fast — gusts are added afterwards, in
+   * second and none of this changes that fast; gusts are added afterwards, in
    * W.windAt, so they stay smooth in time.
    */
   W.weather = function (b, th, t) {
@@ -544,7 +544,7 @@
   /**
    * The wind at a point, as a world-frame velocity to be added to the air a
    * craft is flying through. Tangential to the surface, with a jet stream a
-   * few kilometres up and gusts on top — and gusts blow across the vertical as
+   * few kilometres up and gusts on top, and gusts blow across the vertical as
    * well as along the ground, which is what tips a rocket off its heading.
    */
   const _wind = { x: 0, y: 0, speed: 0, cross: 0 };
@@ -600,7 +600,7 @@
     return false;
   };
 
-  /** which body's sphere of influence a point sits in — innermost claim wins,
+  /** which body's sphere of influence a point sits in: innermost claim wins,
       so a craft near Kore answers Kore rather than Mars or the Sun */
   W.soiBody = function (x, y, t) {
     for (let i = 0; i < SOI_ORDER.length; i++) {
@@ -626,7 +626,7 @@
     const a = -mu / (2 * en);
     const e2 = 1 + (2 * en * h * h) / (mu * mu);
     const e = Math.sqrt(Math.max(0, e2));
-    // eccentricity vector — points at periapsis
+    // eccentricity vector, points at periapsis
     const rv = rx * ux + ry * uy;
     const k = v2 - mu / r;
     const res = {
@@ -649,13 +649,13 @@
    * influence the craft is actually bound to.
    *
    * This matters because a path is stored in its reference body's co-moving
-   * frame — each point relative to where that body was at that instant — and
+   * frame, each point relative to where that body was at that instant, and
    * then drawn anchored on where the body is *now*. That is exactly right for
    * an orbit (the ellipse sits still around the planet while the planet sails
    * along its own orbit) and badly wrong for a path that merely passes
    * through: a craft crossing the Moon's sphere of influence on its way
    * somewhere else used to be re-referenced to the Moon, which swung the far
-   * end of its path thousands of kilometres sideways — and swung it back a
+   * end of its path thousands of kilometres sideways, and swung it back a
    * few minutes later when the reference flipped again. Same for a craft
    * leaving for Mars: bound to the Sun, but drawn about Earth.
    */
@@ -732,7 +732,7 @@
    * So each run of samples inside one sphere of influence becomes a leg, held
    * relative to that world's position at each sample's own instant, and the
    * renderer anchors the whole leg on where that world is now. Both ends then
-   * land where the map draws them, and — the part that matters most — no point
+   * land where the map draws them, and, the part that matters most, no point
    * is ever drawn relative to a world it isn't near, which is what used to
    * scribble the line into knots on the way in to Mars.
    *
@@ -742,7 +742,7 @@
    * and the trouble with that is the slide has to be spent over however many
    * samples happen to straddle the boundary. Out at Mars there are three or
    * four, each a couple of hundred kilometres apart, carrying a slide of a
-   * couple of thousand — which draws as a hard kink an order of magnitude
+   * couple of thousand, which draws as a hard kink an order of magnitude
    * bigger than the path's own stride. Better an honest break at the hand-off.
    */
   const LEG_MIN = 5;
@@ -777,7 +777,7 @@
 
     // Stop after a few hand-offs. Every one of them is a real break in the
     // drawn line, and a path that keeps clipping the corner of a moon's sphere
-    // can rack up a dozen — at which point the map is back to looking like
+    // can rack up a dozen, at which point the map is back to looking like
     // spaghetti, for the opposite reason. Past the third hand-off the
     // prediction is largely hypothetical anyway: it assumes the player flies
     // several encounters without touching the throttle. The closest-approach
@@ -803,8 +803,8 @@
 
   /**
    * The whole conic, sampled analytically. Where one body really is the only
-   * thing pulling, this is both exact — no integrator drift to make a
-   * periapsis wander between refreshes — and roughly ten times cheaper than
+   * thing pulling, this is both exact (no integrator drift to make a
+   * periapsis wander between refreshes) and roughly ten times cheaper than
    * stepping round the orbit. Returns null when the geometry is out of scope
    * (hyperbolic, or reaching far enough out that the neighbours matter), and
    * the caller falls back to integrating.
@@ -849,7 +849,7 @@
     for (let i = 0; i <= N; i++) {
       const E = E0 + (U.TAU * i) / N;
       const p = at(E);
-      // the ground gets in the way — stop there, and pin down where within a
+      // the ground gets in the way, so stop there, and pin down where within a
       // few hundred metres rather than to the nearest sample
       const gr = impactR(ref, p.th);
       if (p.r < gr) {
@@ -895,7 +895,7 @@
       }
     }
 
-    // one body, one sphere, one leg — a conic that reached out of this sphere
+    // one body, one sphere, one leg: a conic that reached out of this sphere
     // was handed to the integrator at the top of the function
     return { legs: [{ ref, pts }], pts, ref, hit, closed: !hit, escape: false, span, closest, conic: true };
   }
@@ -918,12 +918,12 @@
       if (c) return c;
     }
     // samples are collected in plain inertial coordinates and only sorted into
-    // per-world frames at the end, by legsOf — a point's frame depends on
+    // per-world frames at the end, by legsOf, since a point's frame depends on
     // where it turns out to be, which isn't known until it has been stepped to
     const abs = [], ts = [], own = [];
     const g = { x: 0, y: 0 };
     let t = t0, hit = null, escape = false;
-    // optional { posAt(t) } — how close the path we are actually on comes to
+    // optional { posAt(t) }, for how close the path we are actually on comes to
     // whatever is targeted, so the transfer panel can report it live
     const watch = opts.watch || null;
     const closest = watch ? { d: Infinity, t: t0 } : null;
@@ -949,7 +949,7 @@
       // Step size from the nearest thing in the sky, not merely from whichever
       // sphere of influence we happen to be sitting in. Sizing it off Earth's
       // distance means striding a hundred kilometres at a time through a lunar
-      // flyby — and the Moon's sphere of influence is only 800 km across, so
+      // flyby, and the Moon's sphere of influence is only 800 km across, so
       // the encounter that decides the whole rest of the path was resolved by
       // two or three samples, or stepped clean over. Both tests below tighten
       // as anything gets closer: a fraction of the local orbital timescale,
@@ -968,7 +968,7 @@
       }
       if (dt < 0.4) dt = 0.4;
 
-      // velocity Verlet, keeping the state it started from — the ground search
+      // velocity Verlet, keeping the state it started from, since the ground search
       // below re-walks this same step at finer resolution
       const ox = x, oy = y, ovx = vx, ovy = vy, oax = ax, oay = ay, ot = t;
       const nx = x + vx * dt + 0.5 * ax * dt * dt;
@@ -981,7 +981,7 @@
       travelled += lastStep;
       x = nx; y = ny; ax = g.x; ay = g.y;
 
-      // Impact, and which world this sample belongs to — both out of the same
+      // Impact, and which world this sample belongs to, both out of the same
       // sweep, because one pass over every body's position pays for both.
       // Innermost claim wins the sample, so the smallest sphere containing it
       // keeps it, which is the rule W.soiBody uses.
@@ -1025,7 +1025,7 @@
     }
 
     const legs = legsOf(abs, ts, own);
-    // `pts`/`ref` describe the leg holding "now" — the one an older caller
+    // `pts`/`ref` describe the leg holding "now", the one an older caller
     // that hasn't learned about legs would have wanted anyway
     return {
       legs, pts: legs.length ? legs[0].pts : [], ref: legs.length ? legs[0].ref : ref,
@@ -1044,7 +1044,7 @@
    * gets the same answer in a handful of iterations, and a parking orbit is
    * near enough a two-body problem for the purpose.
    *
-   * Returns null for anything not on a closed orbit — the caller falls back to
+   * Returns null for anything not on a closed orbit; the caller falls back to
    * integrating.
    */
   function keplerAt(b, x, y, vx, vy, t0, t1) {
@@ -1060,7 +1060,7 @@
     let E = 2 * Math.atan(hf * Math.tan(nu0 / 2));
     let M = E - e * Math.sin(E) + Math.sqrt(mu / (a * a * a)) * (t1 - t0);
 
-    // Newton on Kepler's equation — a handful of passes is plenty at these
+    // Newton on Kepler's equation: a handful of passes is plenty at these
     // eccentricities, and the bisection guard keeps it honest if it isn't
     M = M % U.TAU;
     let Ei = M;
@@ -1114,7 +1114,7 @@
   }
   W.propagate = propagate;
 
-  /** where `target` sits at time t — a body's closed-form orbit, or a
+  /** where `target` sits at time t: a body's closed-form orbit, or a
       vessel's own propagated track once one has been attached (see
       W.vesselTarget / sampleTrack, below) */
   function targetPos(target, t) {
@@ -1126,7 +1126,7 @@
    *
    * `res` sets how finely to step: the default suits a hop to the Moon, while
    * a crossing between planets covers a hundred times the distance and has to
-   * stride out or it runs out of step budget somewhere short of the target —
+   * stride out or it runs out of step budget somewhere short of the target,
    * which reads as "no route found" when the route was perfectly good.
    *
    * The path it collects is a single run of absolute positions, deliberately
@@ -1164,7 +1164,7 @@
       const d = Math.hypot(x - tp.x, y - tp.y);
       if (d < best) { best = d; bestT = t; bestI = collect ? abs.length / 2 - 1 : 0; }
       if (d < target.radius) { hit = true; break; }
-      // ran into whatever we were nearest on the way — no point flying on
+      // ran into whatever we were nearest on the way, so no point flying on
       const hb = W.soiBody(x, y, t), hp = W.bodyPos(hb, t);
       if (Math.hypot(x - hp.x, y - hp.y) < hb.radius) break;
     }
@@ -1182,7 +1182,7 @@
   /**
    * Wrap a live vessel as a transfer target. A vessel has no closed-form
    * orbit formula the way a body does, so its future position has to come
-   * from propagating its own current (coasting) state — see sampleTrack.
+   * from propagating its own current (coasting) state; see sampleTrack.
    * This assumes the target vessel doesn't burn between now and rendezvous,
    * which is the same assumption any rendezvous planner has to make about
    * a craft it doesn't control.
@@ -1241,7 +1241,7 @@
    * Work out when and how hard to burn to reach `target` from the craft's
    * current orbit.
    *
-   * A Hohmann transfer gives the seed — the burn size that raises apoapsis to
+   * A Hohmann transfer gives the seed: the burn size that raises apoapsis to
    * the target's orbit, and the phase angle the target must be at so it arrives
    * at the same place we do. Because the real integration includes the target's
    * own gravity (and the orbit is rarely perfectly circular), the seed is then
@@ -1260,13 +1260,13 @@
     }
     // Sitting in orbit round a planet with another planet as the target: this
     // is an interplanetary departure, and the world we're parked at is the one
-    // whose orbit we're really leaving from. Anything else — a craft round a
-    // moon aiming at another planet, say — still has to climb out first.
+    // whose orbit we're really leaving from. Anything else, such as a craft round a
+    // moon aiming at another planet, still has to climb out first.
     const dep = (soi !== parent && soi.orbit && soi.parent === parent) ? soi : null;
     if (soi !== parent && !dep) return { ok: false, reason: 'Escape ' + soi.name + ' first.' };
 
     // the parking orbit (round the planet we're leaving) vs. the heliocentric
-    // one — for a plain Earth→Moon hop these are one and the same
+    // one, though for a plain Earth→Moon hop these are one and the same
     const elPark = W.elements(dep || parent, v.x, v.y, v.vx, v.vy, t);
     const el = dep ? W.elements(parent, dep.orbit.a, 0, 0, Math.sqrt(parent.mu / dep.orbit.a), t)
       : W.elements(parent, v.x, v.y, v.vx, v.vy, t);
@@ -1277,7 +1277,7 @@
 
     const mu = parent.mu;
     // a vessel target has no closed-form orbit, so treat its current osculating
-    // ellipse as a stand-in circular orbit for the analytic seed — same
+    // ellipse as a stand-in circular orbit for the analytic seed, the same
     // approximation this already leans on for the (near-circular) Moon
     const elT = target.isVessel
       ? W.elements(parent, target.x0, target.y0, target.vx0, target.vy0, t)
@@ -1294,14 +1294,14 @@
     if (Math.abs(nC - nT) < 1e-12) return { ok: false, reason: 'No transfer window exists.' };
 
     // Where the target must sit, relative to us, at the moment we burn. The
-    // craft arrives half a transfer ellipse later — i.e. at the point opposite
-    // the burn — so the target has to be that far ahead, less however far it
+    // craft arrives half a transfer ellipse later, that is, at the point opposite
+    // the burn, so the target has to be that far ahead, less however far it
     // travels while we're on the way.
     //
     // The gap φ = θtarget − θcraft closes at (nT − nC), so the wait to reach
     // the required φ divides by *that*, not by (nC − nT): with the sign the
     // other way up the seed lands a synodic half-period off, and the numeric
-    // refinement then polishes a window that was never the right one — which
+    // refinement then polishes a window that was never the right one, which
     // is why a third of Moon transfers used to arrive hundreds of kilometres
     // wide of the intended pass.
     const pp = W.bodyPos(parent, t);
@@ -1315,24 +1315,24 @@
     let wait = U.wrap(phiReq - U.wrap(thT - thC)) / (nT - nC);
     while (wait < 0) wait += syn;
 
-    // A vessel sitting in a near-identical orbit (nC≈nT — the natural case
+    // A vessel sitting in a near-identical orbit (nC≈nT, the natural case
     // for two craft launched into similar orbits) makes `syn` enormous, so
     // the natural-drift `wait` above can come out to days or years even
     // though the geometry is otherwise perfectly ordinary. Tracking a target
-    // accurately that far out isn't practical with a fixed sample budget —
+    // accurately that far out isn't practical with a fixed sample budget:
     // the target completes so many of its own orbits between samples that
-    // interpolating its position stops meaning anything — so rather than
+    // interpolating its position stops meaning anything, so rather than
     // hand back a plan that's silently wrong at that range, say so plainly:
     // matching orbits this closely needs a deliberate altitude change first,
     // same as it would for a real rendezvous.
     if (target.isVessel && wait > 4 * 24 * 3600) {
-      return { ok: false, reason: 'Your orbit is almost identical to ' + target.name + "'s — natural drift would take days. Raise or lower your orbit a little, then recalculate." };
+      return { ok: false, reason: 'Your orbit is almost identical to ' + target.name + "'s, so natural drift would take days. Raise or lower your orbit a little, then recalculate." };
     }
 
     let dv0, vNow, period;
     if (dep) {
       // leaving a planet costs escape velocity *plus* whatever the heliocentric
-      // orbit has to change by — the two add in quadrature, which is why a
+      // orbit has to change by, and the two add in quadrature, which is why a
       // departure burn from low orbit is so much cheaper than doing it later
       const vInf = Math.abs(Math.sqrt(mu * (2 / r1 - 1 / at)) - Math.sqrt(mu / r1));
       const rPark = elPark.r;
@@ -1354,7 +1354,7 @@
     // wildly different, so dv0 is comfortably large. A vessel target's most
     // common real case is the opposite: rendezvousing with another craft in
     // a near-identical orbit (nC≈nT). There, dv0 collapses toward zero, so a
-    // spread *proportional to dv0* collapses right along with it — the coarse
+    // spread *proportional to dv0* collapses right along with it, so the coarse
     // pass ends up probing a sliver of burn sizes near zero and can never
     // discover that a deliberately larger phasing burn reaches the target far
     // better than the near-null "Hohmann" the seed suggests. Floor it, for
@@ -1363,17 +1363,17 @@
     // An eccentric starting orbit needs a wider net on both axes: the burn size
     // that reaches the target depends on *where* in the orbit it happens (a
     // kick at periapsis buys far more apoapsis than the same kick higher up),
-    // so the seed — which treats the orbit as a circle of radius `a` — is only
+    // so the seed, which treats the orbit as a circle of radius `a`, is only
     // a rough guide, and a spread tuned for a circle misses the good burns.
     const eccK = U.clamp((dep ? elPark.e : el.e) / 0.1, 0, 1);
     const dvSpread0 = target.isVessel
       ? Math.max(dv0 * 0.18, vNow * 0.02, 2)
       : (dep ? dv0 * 0.35 : dv0 * (0.18 + 0.42 * eccK));
-    // Near-resonant orbits (nC≈nT — a co-orbital rendezvous, the single most
+    // Near-resonant orbits (nC≈nT, a co-orbital rendezvous, the single most
     // common real vessel-target case) can genuinely need a wait spanning a
     // large slice of the synodic period before the phase lines up, since a
     // craft this close to the target's own period drifts past it only very
-    // slowly. `period*0.35` covers well under one orbit in that case — nowhere
+    // slowly. `period*0.35` covers well under one orbit in that case, nowhere
     // near enough. Widen toward the synodic period itself when it's
     // meaningfully larger than the craft's own orbit, capped so the coarse
     // grid doesn't get so sparse it stops resolving anything.
@@ -1381,8 +1381,8 @@
     // play (half a period either way) instead of a third of it, with extra
     // grid points so widening the window doesn't just coarsen it.
     // A departure also has to find the right *point in the parking orbit* to
-    // push from — the ejection asymptote has to end up pointing the way the
-    // planet is going — so it sweeps a whole lap either side of the window.
+    // push from: the ejection asymptote has to end up pointing the way the
+    // planet is going, so it sweeps a whole lap either side of the window.
     const tSpread0 = target.isVessel
       ? Math.max(period * 0.35, Math.min(syn * 0.5, period * 8))
       : (dep ? period * 0.5 : period * (0.35 + 0.15 * eccK));
@@ -1394,10 +1394,10 @@
     // search() runs three nested passes (spreads of tSpread0, then 0.07,
     // then 0.015 of `period`, each recentred on the previous best), so the
     // burn time it tries can walk a little past a single-pass estimate of
-    // `wait` — and each candidate's flyToward then flies another full `span`
+    // `wait`, and each candidate's flyToward then flies another full `span`
     // past that before giving up. Undershooting the true worst case let
     // queries run past the sampled track's end, where .at() clamps to the
-    // last sample and effectively freezes the target in place — which was
+    // last sample and effectively freezes the target in place, which was
     // quietly corrupting the search into optimizing against a stale position
     // instead of the real one. Rather than stack up the exact worst-case
     // fractions across all three passes, just use a generous flat margin
@@ -1409,8 +1409,8 @@
     }
 
     // How close we actually want to pass. Driving the miss distance to zero
-    // aims the craft at the centre of the target — i.e. straight into the
-    // ground — which is a rotten default: arriving in a low orbit is both what
+    // aims the craft at the centre of the target, that is, straight into the
+    // ground, which is a rotten default: arriving in a low orbit is both what
     // a player normally wants and what the mission log rewards, and you can
     // always burn retrograde from orbit to land afterwards. So aim a little
     // above the surface and let the search hit *that*. A rendezvous with
@@ -1425,7 +1425,7 @@
       // Keep the whole grid in the future by sliding it, not by dropping the
       // samples that fall in the past. As a window closes in, half a centred
       // grid is behind us, and skipping those points halves the resolution
-      // exactly when the plan matters most — a thin grid finds a worse burn,
+      // exactly when the plan matters most: a thin grid finds a worse burn,
       // the window then looks bad, and the fallback below throws the player a
       // synodic period into the future for no good reason.
       let lo = centreT - tSpread, hi = centreT + tSpread;
@@ -1435,10 +1435,10 @@
         if (tB < t) continue;
         // Coast to the burn analytically. A transfer window can be weeks out,
         // which is hundreds of thousands of integrator steps at low-orbit step
-        // sizes — Kepler's equation gets there in microseconds instead.
+        // sizes; Kepler's equation gets there in microseconds instead.
         const st = keplerAt(soi, v.x, v.y, v.vx, v.vy, t, tB) ||
           propagate(v.x, v.y, v.vx, v.vy, t, tB - t);
-        // prograde in the frame the autopilot uses — the planet we are parked
+        // prograde in the frame the autopilot uses: the planet we are parked
         // at while departing, the Sun once we are out in open space
         const pv = W.bodyVel(dep || parent, st.t);
         const sp = Math.hypot(st.vx - pv.x, st.vy - pv.y) || 1;
@@ -1447,7 +1447,7 @@
           const dv = dvCentre + dvSpread * (nD === 1 ? 0 : (k / (nD - 1) - 0.5) * 2);
           if (dv <= 0) continue;
           const r = flyToward(st.x, st.y, st.vx + ux * dv, st.vy + uy * dv, tB, target, span, false, res);
-          // among arrivals that are equally good, prefer the cheaper burn —
+          // among arrivals that are equally good, prefer the cheaper burn,
           // otherwise the search happily picks a fast, expensive crossing over
           // the leisurely one that costs 200 m/s less
           const raw = Math.abs(r.miss - wantMiss);
@@ -1460,7 +1460,7 @@
     };
     search(t + wait, tSpread0, dv0, dvSpread0, nT0, nD0);
 
-    // Is what we have worth flying? Judged on the arrival alone — the Δv
+    // Is what we have worth flying? Judged on the arrival alone; the Δv
     // tiebreaker in the ranking is for choosing between candidates, not for
     // deciding whether a window was any good. A departure that lands well
     // inside the target's sphere of influence counts as good even if it isn't
@@ -1480,7 +1480,7 @@
     // window and the next one every time the player recalculates.
     if (unhappy()) search(t + wait, tSpread0, dv0, dvSpread0, nT0 * 2 + 1, nD0);
 
-    // Still no good — try the next window round and keep whichever wins.
+    // Still no good, so try the next window round and keep whichever wins.
     // (Vessel targets sit this out: their sampled position track only covers
     // the first window, so probing past it would be measuring a frozen target.)
     if (unhappy()) {
@@ -1488,7 +1488,7 @@
       best = null;
       search(t + wait + syn, tSpread0, dv0, dvSpread0, nT0, nD0);
       // The window in front of you wins ties, and near-ties. Waiting another
-      // synodic period — three and a half weeks out to Mars — has a real cost
+      // synodic period, three and a half weeks out to Mars, has a real cost
       // the error figure knows nothing about, so the later window has to be
       // decisively better (less than half the error) before it is worth
       // taking. Without this the two windows trade places on noise, and a
@@ -1525,7 +1525,7 @@
    * Mid-course correction.
    *
    * Once the injection burn is done and the craft is on its way, a fresh
-   * Hohmann plan is worse than useless — it describes a burn from an orbit the
+   * Hohmann plan is worse than useless: it describes a burn from an orbit the
    * craft is no longer in, at a window days away. What a player actually needs
    * then is the small nudge that moves the arrival to where they wanted it, so
    * this sweeps prograde/retrograde kicks applied *now* and keeps the one whose
@@ -1538,13 +1538,13 @@
     const wantMiss = wantOverride != null ? wantOverride
       : (target.isVessel ? 0 : target.radius * 1.28);
     const soi = target.isVessel ? (target.soi || 5000) : (target.soi || target.radius * 3);
-    // look ahead one full lap of whatever path the craft is on now — the pass
+    // look ahead one full lap of whatever path the craft is on now, since the pass
     // we are trying to move has to happen inside that
     const elNow = W.elements(W.soiBody(v.x, v.y, t), v.x, v.y, v.vx, v.vy, t);
     let span = U.clamp(isFinite(elNow.period) ? elNow.period * 1.1 : 12 * 3600,
       3 * 3600, 3 * 24 * 3600);
     // aiming at another planet? then look ahead far enough to actually get
-    // there — roughly a Hohmann crossing from wherever we are now
+    // there, roughly a Hohmann crossing from wherever we are now
     if (!target.isVessel && target.orbit && target.parent) {
       const pp = W.bodyPos(target.parent, t);
       const rHere = Math.max(1, Math.hypot(v.x - pp.x, v.y - pp.y));
@@ -1604,7 +1604,7 @@
 
   /**
    * The next low point (or high point) of the path we're on, relative to body
-   * b, found by propagating rather than from the osculating ellipse — so it
+   * b, found by propagating rather than from the osculating ellipse, so it
    * survives the Moon's tug and a hand-off between spheres of influence, and
    * works just as well on a hyperbolic arrival as on a closed orbit.
    */
@@ -1653,7 +1653,7 @@
    * that needs its apoapsis burn to become an orbit, an arrival from elsewhere
    * that needs catching at periapsis, and a craft somewhere unhelpful that
    * needs a nudge now before either of those is on offer. Which apsis to burn
-   * at falls out of which one is already at a sensible height — raise or lower
+   * at falls out of which one is already at a sensible height: raise or lower
    * the other side to meet it and the orbit is round.
    */
   W.planCapture = function (v, b, t) {
@@ -1692,7 +1692,7 @@
     const apo = apsisAhead(v, b, t, span, true);
     if (apo && apo.r >= lo && apo.r <= hi) return node(apo, 'apoapsis');
 
-    // neither end of the path is anywhere near a low orbit — get one there
+    // neither end of the path is anywhere near a low orbit, so get one there
     // first, then the capture burn above becomes available
     const c = W.planCorrection(v, b, t, wantR);
     if (c && c.ok) { c.capture = true; c.toOrbit = true; return c; }
@@ -1812,7 +1812,7 @@
 
   /**
    * Every scenery item whose angle falls inside [th0, th1].
-   * Chunk indices come straight from the angle — atan2 keeps θ in (−π, π],
+   * Chunk indices come straight from the angle; atan2 keeps θ in (−π, π],
    * so indices stay bounded and each cached item keeps the exact ground
    * height it was generated against. Returns the cached objects themselves
    * (no allocation) because this runs every physics step.
@@ -1848,7 +1848,7 @@
       const alt = U.lerp(cf.loAlt, cf.hiAlt, ra * ra);
       const w = U.lerp(340, 1250, U.hash(b.seed + 7, ci, k * 13 + 4));
       const h = w * U.lerp(0.26, 0.44, U.hash(b.seed + 7, ci, k * 13 + 5));
-      // lumps sitting on a flat base, tallest in the middle — a cumulus profile
+      // lumps sitting on a flat base, tallest in the middle, a cumulus profile
       const puffs = [];
       const n = 6 + Math.floor(U.hash(b.seed + 7, ci, k * 13 + 6) * 5);
       for (let p = 0; p < n; p++) {
@@ -1915,7 +1915,7 @@
   /** the raw landscape, before any pad is flattened into it */
   function baseHeight(b, th) { return b.radius + continents(b, th) + detailOf(b, th, 0); }
 
-  /** how good a site the ground at `th` makes — dry from end to end of the
+  /** how good a site the ground at `th` makes: dry from end to end of the
       city, and low enough that the pad isn't perched up a mountain */
   function siteScore(b, th, span) {
     let low = Infinity, high = -Infinity;
@@ -1956,7 +1956,7 @@
   W.padTheta = EARTH.pad.theta;
   W.padGround = terrain(EARTH, EARTH.pad.theta);
 
-  /** where a launch complex is in world coordinates — Earth is going round the
+  /** where a launch complex is in world coordinates: Earth is going round the
       Sun, so a pad is a moving place (and so is everything sitting on it) */
   W.padPoint = function (t, site) {
     const st = site || EARTH.pad;

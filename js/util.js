@@ -1,5 +1,5 @@
 /* ============================================================
-   util.js — math, formatting and misc helpers
+   util.js: math, formatting and misc helpers
    ============================================================ */
 window.SFS = window.SFS || {};
 (function (S) {

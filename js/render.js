@@ -1,5 +1,5 @@
 /* ============================================================
-   render.js — camera, planets, oceans, scenery, clouds,
+   render.js: camera, planets, oceans, scenery, clouds,
                vessels, exhaust, particles and the map view
    ------------------------------------------------------------
    Everything is drawn in CAMERA-RELATIVE metres so that path
@@ -93,7 +93,7 @@
     return best;
   };
 
-  /** which vessel is under this screen point in map view (null if none) —
+  /** which vessel is under this screen point in map view (null if none),
       checked ahead of R.pickBody by the caller, since craft are the more
       specific, point-like click target */
   R.pickVessel = function (sx, sy, cw, ch, vessels) {
@@ -135,7 +135,7 @@
       const lx = dx * ca + dy * sa + ves.com.x;       // world → the craft's own axes
       const ly = -dx * sa + dy * ca + ves.com.y;
       // take the part the point sits deepest inside, not merely the first one
-      // it grazes — with any slack at all a tall neighbour swallows the click
+      // it grazes; with any slack at all a tall neighbour swallows the click
       let best = null, bestScore = Infinity;
       for (const p of ves.parts) {
         const ex = Math.abs(lx - p.lx) - p.def.w / 2;
@@ -159,11 +159,11 @@
   };
 
   // every wheel notch / pinch step is taken to this power, so a quarter of the
-  // zoom happens per input — fine control beats racing to the limits
+  // zoom happens per input, since fine control beats racing to the limits
   const ZOOM_STEP = 0.5;
 
   /**
-   * Zoom about a screen point — the map is pannable, so a wheel over the far
+   * Zoom about a screen point: the map is pannable, so a wheel over the far
    * side of a planet should pull *that* toward you, not the craft.
    * `sx`/`sy` optional; without them this is R.zoomBy.
    */
@@ -175,7 +175,7 @@
     R.zoomBy(f);
   };
 
-  /** drop the zoom anchor — panning takes over from here */
+  /** drop the zoom anchor; panning takes over from here */
   R.dropAnchor = function () { zAnchor = null; };
 
   /**
@@ -198,7 +198,7 @@
     if (cam.map) {
       cam.mapSet = true;
       // the map spans planet-to-planet distances, so the same wheel/pinch
-      // step that feels right up close made the map lurch — soften it here
+      // step that feels right up close made the map lurch, so soften it here
       // rather than in every caller
       const soft = Math.pow(f, 0.45 * ZOOM_STEP);
       // recover if it ever got stuck at zero or NaN, otherwise multiplying
@@ -236,7 +236,7 @@
     const bp = W.bodyPos(b, t);
     const want = Math.PI / 2 - Math.atan2(v.y - bp.y, v.x - bp.x);
     // Position tracks exactly. Easing it leaves a steady-state lag of
-    // speed/rate metres, which at orbital speed is hundreds of metres — enough
+    // speed/rate metres, which at orbital speed is hundreds of metres, enough
     // to push the craft clean off a zoomed-in screen. The craft's own motion is
     // already smooth, so there is nothing here worth filtering.
     cam.x = v.x;
@@ -306,13 +306,13 @@
     // the way up) darkens the whole upper half of the climb into a long,
     // gradual fade instead of a bright sky that snaps to black near the top.
     // The horizon glow fades slowest, which is how a real high-altitude sky
-    // looks — dark overhead, a bright band still hugging the limb.
+    // looks: dark overhead, a bright band still hugging the limb.
     const c = (body || W.earth).col;
     const day = scene.day, dusk = scene.dusk, wx = scene.wx;
 
     // Daylight scales the whole sky, so the same gradient carries a blue noon,
     // a deep blue-grey night, and everything between. Dusk lays a warm band
-    // over the bottom of it — brightest right as the sun crosses the horizon,
+    // over the bottom of it, brightest right as the sun crosses the horizon,
     // and strongest low down, which is where a sunset actually lives.
     let hi = mixRGB(NIGHT_SKY, c.skyHi, Math.pow(atmoF, 2.6) * (0.07 + 0.93 * day));
     let mid = mixRGB(NIGHT_SKY, c.sky, Math.pow(atmoF, 2.0) * (0.05 + 0.95 * day));
@@ -362,7 +362,7 @@
     // low sun reddens and the disc swells, the way it does through thick air
     const warm = U.clamp(1 - el * 2.2, 0, 1);
     const core = css(mixRGB('#fff6d8', '#ff9040', warm));
-    // thick cloud hides the sun completely — you should not be able to pick it
+    // thick cloud hides the sun completely: you should not be able to pick it
     // out of a thunderstorm
     const seen = U.clamp((el + 0.16) / 0.18, 0, 1) * atmoF *
       U.clamp(1 - scene.wx.cover * 1.05 - scene.wx.storm * 0.6, 0, 1);
@@ -410,7 +410,7 @@
     }
     if (drops.length > want) drops.length = want;
 
-    // the wind blows the fall sideways — the same wind the craft is fighting
+    // the wind blows the fall sideways, the same wind the craft is fighting
     const slant = U.clamp(wind / (snowy ? 6 : 28), -2.2, 2.2);
     const vy = snowy ? 90 : 620;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -465,7 +465,7 @@
     const dc = Math.hypot(rx, ry);
     const zoom = cam.map ? cam.mapZoom : cam.zoom;
 
-    // entirely off-screen — skip it (also keeps path coords sane when zoomed in)
+    // entirely off-screen, so skip it (also keeps path coords sane when zoomed in)
     const outer = b.radius + (b.atmo ? b.atmo.height : 0) + 4000;
     if (dc - outer > viewR * (b.star ? 6 : 1.7)) return;   // a star's glare reaches further
 
@@ -516,13 +516,13 @@
   /**
    * The view from orbit. In a 2-D world the only real surface is the rim, so
    * the disc is the planet's bulk and land/ocean show as a coloured band round
-   * the edge — drawing continents as pie sectors would read as a pie chart.
+   * the edge; drawing continents as pie sectors would read as a pie chart.
    */
   function drawOrbital(ctx, b, rx, ry, zoom, alpha, t) {
     ctx.save();
     ctx.globalAlpha = alpha;
     const Rr = b.radius;
-    // the lit side is wherever the sunlight is falling from *now* — which is
+    // the lit side is wherever the sunlight is falling from *now*, which is
     // what makes the terminator crawl round the globe as the day passes
     const sunA = W.sunAngle(b, t == null ? W.t : t);
 
@@ -539,7 +539,7 @@
 
     // surface band: green where land pokes above sea level, blue where it doesn't
     // The band is widened at low zoom so it stays visible, but it must never
-    // grow past the globe itself — that drives the arc radius negative and
+    // grow past the globe itself: that drives the arc radius negative and
     // canvas throws IndexSizeError.
     const band = Math.min(Math.max(Rr * 0.062, 1.5 / zoom), Rr * 0.9);
     const rMid = Math.max(Rr * 0.05, Rr - band / 2);
@@ -629,14 +629,14 @@
    * what it looks like. Close in it is a lie with a number attached: an impact
    * marker is placed on the real ground, so on a map that draws none the X
    * floats above a smooth blue circle by exactly however high the hillside it
-   * hit happens to be — a hundred metres at Kestrel Bay, two kilometres in the
+   * hit happens to be, a hundred metres at Kestrel Bay, two kilometres in the
    * mountains. Below sea level nothing is drawn, because there the disc's own
    * edge already is the surface a craft would splash into.
    */
   function drawRelief(ctx, b, rx, ry, zoom, viewR) {
     if (!b.relief || b.relief * zoom < 1.2) return;
     const Rr = b.radius, sea = b.seaLevel;
-    // nothing of it on screen — and the map's body loop doesn't cull, so
+    // nothing of it on screen, and the map's body loop doesn't cull, so
     // without this a zoom in on Earth still walks Mars' coastline every frame
     if (Math.hypot(rx, ry) - Rr - b.relief > viewR) return;
     const halfAng = Math.min(Math.PI, (viewR + Rr * 0.02) / Rr + 0.02);
@@ -645,7 +645,7 @@
     const dth = (halfAng * 2) / n;
     const th0 = thC - halfAng;
 
-    // Sample the ground once and keep it — the fill below walks each stretch
+    // Sample the ground once and keep it: the fill below walks each stretch
     // twice, and terrain() is much the most expensive thing here.
     const th = new Float64Array(n + 1);
     const gr = new Float64Array(n + 1);
@@ -806,7 +806,7 @@
 
   /**
    * Nightfall over the ground. The land and everything standing on it is
-   * already drawn by now, so darkness is one veil laid over the lot — graded
+   * already drawn by now, so darkness is one veil laid over the lot, graded
    * along the arc, so from high up you can watch the terminator crossing the
    * landscape rather than the whole view dimming at once.
    */
@@ -1018,7 +1018,7 @@
       ctx.fillStyle = '#ff4444';
       ctx.beginPath(); ctx.arc(0, h * 1.02, w * 0.16, 0, U.TAU); ctx.fill();
     },
-    /** a desert saguaro — trunk and a raised arm or two */
+    /** a desert saguaro: trunk and a raised arm or two */
     cactus(ctx, o) {
       const w = o.w, h = o.h;
       ctx.strokeStyle = '#3f6b39'; ctx.lineCap = 'round';
@@ -1052,7 +1052,7 @@
       }
       ctx.stroke();
     },
-    /** a downtown tower — the tall stuff a city is built round */
+    /** a downtown tower: the tall stuff a city is built round */
     tower(ctx, o, t) {
       const w = o.w, h = o.h;
       const step = U.hash(o.seed, 3, 1) > 0.55;      // some of them set back near the top
@@ -1109,7 +1109,7 @@
 
   /**
    * A grid of windows. How many are lit depends on the hour: a wall of glass in
-   * daylight, a scattering of warm squares once it is dark — which is what
+   * daylight, a scattering of warm squares once it is dark, which is what
    * turns a city into a skyline at night.
    */
   function windows(ctx, o, x0, y0, w, h) {
@@ -1360,7 +1360,7 @@
   // Particles used to live in a frame where the world stood still, so "slows
   // to a stop" meant stopping at the origin. Earth now laps the Sun at two
   // kilometres a second, and settling into *that* frame drags every puff off
-  // the pad — smoke drifted metres clear of the nozzle within a second.
+  // the pad: smoke drifted metres clear of the nozzle within a second.
   // Everything that damps toward rest, or is born at rest, measures against
   // this instead: the velocity of the world the effects are happening on.
   // FX.update refreshes it each frame from the body it is handed.
@@ -1388,7 +1388,7 @@
 
   /**
    * Puff radius over its life. Smoke billows out fast the moment it leaves the
-   * nozzle and then keeps drifting, so growth is front-loaded — linear growth
+   * nozzle and then keeps drifting, so growth is front-loaded; linear growth
    * left a thin gap right behind the rocket.
    */
   function radiusOf(p) {
@@ -1415,7 +1415,7 @@
     if (!thick && atmoF < 0.06) return;
     const dens = thick ? Math.max(atmoF, 0.55) : atmoF;
 
-    // Emit a *count*, not a coin flip — a single spawn per call silently
+    // Emit a *count*, not a coin flip: a single spawn per call silently
     // capped a 6× smoker at 1× no matter what the multiplier said.
     const want = dt * 48 * (thick ? Math.sqrt(sm) * 1.15 : 1) * p.throttle;
     let count = Math.floor(want);
@@ -1431,7 +1431,7 @@
 
     // On the pad the plume has nowhere to go but sideways. Left alone, every
     // puff follows the same exhaust jet down into the same patch of ground
-    // and piles into one clump under the rocket — real ground-hugging exhaust
+    // and piles into one clump under the rocket, whereas real ground-hugging exhaust
     // fans out into a broad, low cloud instead. Fade this out by ~150 m so
     // ordinary ascent/in-flight smoke is untouched.
     const ground = groundAlt == null ? 0 : U.clamp(1 - groundAlt / 150, 0, 1);
@@ -1470,8 +1470,8 @@
    * arriving from in `v.heatDir` (the airflow on re-entry, the Sun when you
    * are too close to it).
    *
-   * Embers come off the parts actually taking the heat — the ones on the
-   * windward face, weighted by how hot each has got — and stream away from the
+   * Embers come off the parts actually taking the heat, the ones on the
+   * windward face, weighted by how hot each has got, and stream away from the
    * source. Spraying them from the middle of the hull instead used to put the
    * fire down one side of the rocket regardless of which end was into the flow.
    */
@@ -1533,7 +1533,7 @@
         x: pick._fxX + ux * front * 0.9 - uy * j2,
         y: pick._fxY + uy * front * 0.9 + ux * j2,
         // trails back through the air, so the fraction kept is of the speed
-        // through the air — not of the raw heliocentric velocity
+        // through the air, not of the raw heliocentric velocity
         vx: frame.x + (v.vx - frame.x) * 0.6 - ux * back,
         vy: frame.y + (v.vy - frame.y) * 0.6 - uy * back,
         life: 0, max: 0.45 + Math.random() * 1.1,
@@ -1598,7 +1598,7 @@
   FX.explode = function (v) {
     const R0 = v.radius();
 
-    // fireball — the fast, bright core of the blast
+    // fireball: the fast, bright core of the blast
     for (let i = 0; i < 40; i++) {
       const a = Math.random() * U.TAU, s = 20 + Math.random() * 110;
       push({
@@ -1612,7 +1612,7 @@
       });
     }
 
-    // sparks — a quick shower of embers flung clear of the fireball
+    // sparks: a quick shower of embers flung clear of the fireball
     for (let i = 0; i < 26; i++) {
       const a = Math.random() * U.TAU, s = 70 + Math.random() * 190;
       push({
@@ -1626,7 +1626,7 @@
       });
     }
 
-    // smoke — a big, dark, slow-rising column that lingers long after the
+    // smoke: a big, dark, slow-rising column that lingers long after the
     // fire has died down, so the wreck keeps smouldering on screen
     for (let i = 0; i < 90; i++) {
       const a = Math.random() * U.TAU, s = 4 + Math.random() * 36;
@@ -1658,7 +1658,7 @@
   };
 
   /**
-   * Advance particles. `body` is the world whose surface they can land on —
+   * Advance particles. `body` is the world whose surface they can land on,
    * smoke, dust and debris pile up on the ground (or the sea) instead of
    * sinking through it.
    */
@@ -1672,7 +1672,7 @@
     for (let i = parts.length - 1; i >= 0; i--) {
       const p = parts[i];
       // only the slice of this frame the particle has been alive for
-      // (a load or a revert can wind the clock back under a live particle —
+      // (a load or a revert can wind the clock back under a live particle,
       // anything not born inside this frame just takes the whole step)
       const h = p.born > t - dt && p.born <= t ? t - p.born : dt;
       p.life += h;
@@ -1684,7 +1684,7 @@
         p.vy += g.y * p.grav * h;
       }
       // drag bleeds off motion *through the air*, and the air travels with
-      // its world — damping the raw velocity would blow every particle off a
+      // its world, so damping the raw velocity would blow every particle off a
       // moving planet at that planet's orbital speed
       const d = Math.exp(-p.drag * h);
       p.vx = frame.x + (p.vx - frame.x) * d;
@@ -1698,7 +1698,7 @@
       const th = Math.atan2(dy, dx);
       let gr = W.terrain(body, th);
       if (body.sea && gr < body.seaLevel) gr = body.seaLevel;   // rest on the water
-      // sit the puff *on* the surface, not centred in it — and keep doing so as
+      // sit the puff *on* the surface, not centred in it, and keep doing so as
       // it swells, otherwise a growing cloud sinks back into the ground
       const rest = gr + radiusOf(p) * 0.55;
       if (r >= rest) continue;
@@ -1737,7 +1737,7 @@
       if (r * zoom < 0.35) continue;
       const dx = p.x - cam.x, dy = p.y - cam.y;
       if (Math.abs(dx) - r > cull || Math.abs(dy) - r > cull) continue;
-      // hold opacity through most of the life, then fade — a squared falloff
+      // hold opacity through most of the life, then fade; a squared falloff
       // made the trail wash out while it was still close behind the rocket
       ctx.globalAlpha = p.a0 * (1 - k * k * k);
       ctx.fillStyle = 'rgb(' + p.col[0] + ',' + p.col[1] + ',' + p.col[2] + ')';
@@ -1757,15 +1757,15 @@
    *
    * A path arrives split into legs, each held in the frame of the world whose
    * sphere of influence it flies through (see W.predict), so each one is
-   * anchored on where that world is *now* — which is the only way a line to
+   * anchored on where that world is *now*, which is the only way a line to
    * Mars can both leave the Earth it is drawn beside and reach the Mars it is
    * drawn beside.
    *
    * Where two legs meet there is a real break: the same instant, drawn about
    * two worlds that have moved differently since. A faint dotted connector
-   * spans it while the break is of a size that belongs to the hand-off itself
-   * — a few spheres of influence, which is what a couple of hours of a
-   * planet's own travel comes to — so the eye reads one path handing over
+   * spans it while the break is of a size that belongs to the hand-off itself,
+   * a few spheres of influence, which is what a couple of hours of a
+   * planet's own travel comes to, so the eye reads one path handing over
    * rather than two paths. Further out than that the break is measured in days
    * of orbital motion and there is nothing useful to draw between them.
    */
@@ -1844,7 +1844,7 @@
     setWorldTf(ctx, cw, ch, dpr, cam.mapZoom, 0);
     const z = cam.mapZoom;
 
-    // every orbit, drawn round whatever it goes round — the planets about the
+    // every orbit, drawn round whatever it goes round: the planets about the
     // Sun, the moons about their planets
     ctx.strokeStyle = 'rgba(120,150,200,.22)';
     ctx.lineWidth = 1 / z;
@@ -1868,7 +1868,7 @@
         ctx.fill();
       }
       // zoomed out to see the whole system a planet is a fraction of a pixel
-      // across, so give it a floor size — and a name, since at that scale one
+      // across, so give it a floor size, and a name, since at that scale one
       // dot looks much like another
       if (b.radius * z < 3) {
         ctx.beginPath();
@@ -1927,7 +1927,7 @@
       ctx.setLineDash([]);
       // Where the worlds will actually be when this line gets to them. A
       // plotted transfer is drawn in absolute space, so both of its ends sit
-      // well away from the planets as the map draws them today — the departure
+      // well away from the planets as the map draws them today: the departure
       // where Earth will be at the burn, the arrival where Mars will be days
       // later. Unexplained that reads as a plan that misses by half the solar
       // system; with the two worlds ghosted in at the times that matter it
@@ -1950,7 +1950,7 @@
       ctx.stroke();
     }
 
-    // whatever we're aiming at — a world, or (for a rendezvous) a live vessel,
+    // whatever we're aiming at: a world, or (for a rendezvous) a live vessel,
     // duck-typed apart by the presence of .parts (only vessels have those)
     if (G.target) {
       const isVes = !!G.target.parts;
@@ -1965,7 +1965,7 @@
       ctx.setLineDash([]);
     }
 
-    // every other vessel in the world — other missions and junk alike, each
+    // every other vessel in the world: other missions and junk alike, each
     // with whatever path F.predictOthers() last cached for it. Missions get a
     // brighter path + a label; junk is dimmer and unlabeled to stay out of the way.
     if (G.vessels) {
@@ -2141,7 +2141,7 @@
     const t = G.t;
     const dt = G.dt > 0 ? Math.min(G.dt, 0.1) : 1 / 60;
     const v = G.focus;
-    // the sky belongs to whatever world we are over — Earth's blue, Mars'
+    // the sky belongs to whatever world we are over: Earth's blue, Mars'
     // thin rust-coloured haze, or nothing at all above an airless rock
     const skyBody = (v && v.nearBody) || W.earth;
     const alt = v && v.altASL != null ? v.altASL : 1e9;
@@ -2159,7 +2159,7 @@
 
     drawSky(ctx, cw, ch, dpr, atmoF, skyBody, th, t);
     // stars come out to match the darkening sky above, rather than staying
-    // hidden until the very top of the atmosphere — and they are out at night
+    // hidden until the very top of the atmosphere, and they are out at night
     // from the ground too, as long as the cloud lets them through
     const nightStars = (1 - scene.day) * U.clamp(1 - scene.wx.cover * 1.25, 0, 1) * 0.95;
     drawStars(ctx, cw, ch, dpr,

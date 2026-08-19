@@ -1,5 +1,5 @@
 /* ============================================================
-   Spaceflight Simulator — UI styles
+   Spaceflight Simulator: UI styles
    ============================================================ */
 :root{
   --bg:#05070f;
@@ -15,7 +15,7 @@
   --bad:#ff5a5a;
   --font:'Segoe UI',Roboto,-apple-system,'Helvetica Neue',Arial,sans-serif;
   --mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
-  /* height of the active-missions widget, measured by main.js — everything
+  /* height of the active-missions widget, measured by main.js, so everything
      that shares the bottom of the screen keeps clear of it */
   --missionH:0px;
 }
@@ -393,17 +393,17 @@ button:disabled{opacity:.4;cursor:default}
 .missionRow .mRec.armed{border-color:var(--bad);color:#ffbaba;background:rgba(150,40,40,.35)}
 
 /* keep the widget from landing on top of anything else that lives at the
-   bottom of the screen — the menu card, the hangar panels, the build hint */
+   bottom of the screen: the menu card, the hangar panels, the build hint */
 body.hasMissions .overlay{padding-bottom:calc(var(--missionH) + 24px)}
 /* the card is centred in the *padded* box, so capping it to what's left above
-   the widget is what actually keeps the two apart — a taller card scrolls
+   the widget is what actually keeps the two apart, since a taller card scrolls
    inside itself instead of sliding down behind the widget */
 body.hasMissions .menuCard{max-height:calc(100vh - var(--missionH) - 44px);overflow-y:auto}
 body.hasMissions .panel{top:calc(50% - var(--missionH) / 2)}
 body.hasMissions #buildHint{bottom:calc(var(--missionH) + 26px)}
 body.hasMissions #tankPaint{bottom:calc(var(--missionH) + 62px)}
-/* the widget is centred, so on a wide screen it clears the side panels by
-   itself — only squeeze them when the screen is too narrow for that */
+/* the widget is centred, so on a wide screen it clears the side panels on its
+   own; only squeeze them when the screen is too narrow for that */
 @media (max-width:1000px){
   body.hasMissions #stageEdit{bottom:calc(var(--missionH) + 20px)}
   body.hasMissions #palette{bottom:calc(var(--missionH) + 8px)}
@@ -451,7 +451,7 @@ body.hasMissions #tankPaint{bottom:calc(var(--missionH) + 62px)}
   white-space: nowrap; }
 #siteInfo.hidden { display: none; }
 .hudRow.wx.rough b { color: #ffc65c; }
-/* time and conditions read as one line each — wrapping them looks broken */
+/* time and conditions read as one line each, since wrapping them looks broken */
 #timeRow b, #wxRow b { white-space: nowrap; font-size: 11px; }
 #timeRow span, #wxRow span { white-space: nowrap; }
 
