@@ -667,6 +667,67 @@
   W.frameBody = frameBody;
 
   /**
+   * How far to slide one path point sideways, for *display only*.
+   *
+   * A path is a string of positions at different times, but the map draws the
+   * worlds where they are right now. Plotted in raw inertial coordinates a
+   * path is correct in space and misleading on screen: the departure leg sits
+   * where Earth *was* when the craft left, so it appears to cut straight
+   * through a planet that has since coasted clear of it, and the arrival leg
+   * sits where Mars *isn't yet*, so a transfer that arrives dead on looks like
+   * it misses by millions of kilometres. Both readings are alarming and both
+   * are wrong.
+   *
+   * So each point is slid toward wherever its local world is actually drawn:
+   * fully co-moving with that world deep inside its sphere of influence,
+   * fading back to the path's own frame by the boundary — which is exactly
+   * where that world stops being the thing you are flying around. The line
+   * bends gently in between, and in exchange both of its ends land on the
+   * worlds they really leave from and arrive at.
+   *
+   * Returns the *extra* offset on top of the caller's own frame shift, so a
+   * point already inside the frame body's sphere (an ordinary orbit) gets
+   * zero and is drawn exactly as it always was.
+   */
+  const _pblend = { x: 0, y: 0 };
+
+  function mapBlend(x, y, t, tNow, ref, out) {
+    out.x = 0; out.y = 0;
+    const b = W.soiBody(x, y, t);
+    if (b === ref || !b.soi) return out;
+    const bp = W.bodyPos(b, t);
+    const bx = bp.x, by = bp.y;               // copy: bodyPos hands back its own cache
+    const d = Math.hypot(x - bx, y - by);
+    // all of it well inside the sphere, none of it by the boundary
+    let w = U.clamp((1 - d / b.soi) / 0.65, 0, 1);
+    if (w <= 0) return out;
+
+    const rp = W.bodyPos(ref, t);
+    const rpx = rp.x, rpy = rp.y;
+    const rn = W.bodyPos(ref, tNow);
+    const baseX = rn.x - rpx, baseY = rn.y - rpy;
+    const bn = W.bodyPos(b, tNow);
+    const offX = (bn.x - bx) - baseX, offY = (bn.y - by) - baseY;
+
+    // Only ever a *small* correction. Slide a point by more than the sphere it
+    // sits in and "where that world is now" has stopped meaning anything: a
+    // target a week's flight away has moved a good fraction of its own orbit,
+    // and dragging the arrival onto where it is drawn today would bend the
+    // path by more than the length of the trip. Worse, the slide would have to
+    // be spent across the two or three samples that cross the sphere, which
+    // shows up as a hard kink in the line. So it fades out as the offset grows
+    // past the sphere, which leaves the near-departure fix (where the shift is
+    // a few thousand kilometres) and quietly declines the rest.
+    const off = Math.hypot(offX, offY);
+    if (off > b.soi) return out;
+    w *= 1 - off / b.soi;
+
+    out.x = w * offX;
+    out.y = w * offY;
+    return out;
+  }
+
+  /**
    * The whole conic, sampled analytically. Where one body really is the only
    * thing pulling, this is both exact — no integrator drift to make a
    * periapsis wander between refreshes — and roughly ten times cheaper than
@@ -836,7 +897,9 @@
       x = nx; y = ny; ax = g.x; ay = g.y;
 
       const rp = W.bodyPos(ref, t);
-      pts.push(x - rp.x, y - rp.y);
+      const rpx = rp.x, rpy = rp.y;        // copy: mapBlend reuses the same cache
+      mapBlend(x, y, t, t0, ref, _pblend);
+      pts.push(x - rpx + _pblend.x, y - rpy + _pblend.y);
 
       if (watch) {
         const wp = watch.posAt(t);
@@ -850,10 +913,13 @@
         const cdx = x - cp.x, cdy = y - cp.y;
         const cr = Math.hypot(cdx, cdy);
         if (cr < cb.radius + 4000 && cr < terrain(cb, Math.atan2(cdy, cdx))) {
-          // in the path's own frame, so the marker sits on the end of the line
-          // rather than wherever the body it hit happens to be right now
+          // in the path's own frame, and slid the same way the line was, so
+          // the marker stays on the end of the line rather than sitting
+          // wherever the body it hit happens to be right now
           const hp = W.bodyPos(ref, t);
-          hit = { body: cb, t: t - t0, x: x - hp.x, y: y - hp.y };
+          const hpx = hp.x, hpy = hp.y;
+          mapBlend(x, y, t, t0, ref, _pblend);
+          hit = { body: cb, t: t - t0, x: x - hpx + _pblend.x, y: y - hpy + _pblend.y };
           break;
         }
       }
@@ -966,7 +1032,7 @@
    * stride out or it runs out of step budget somewhere short of the target —
    * which reads as "no route found" when the route was perfectly good.
    */
-  function flyToward(x, y, vx, vy, t0, target, span, collect, res) {
+  function flyToward(x, y, vx, vy, t0, target, span, collect, res, tNow) {
     let t = t0, best = Infinity, bestT = t0, hit = false;
     // a hop to the Moon and a crossing to another planet differ by a hundredfold
     // in both distance and duration, so the stride scales with the span asked for
@@ -986,7 +1052,15 @@
       W.gravity(nx, ny, t, g);
       vx += 0.5 * (ax + g.x) * dt; vy += 0.5 * (ay + g.y) * dt;
       x = nx; y = ny; ax = g.x; ay = g.y;
-      if (collect) pts.push(x, y);
+      if (collect) {
+        // Drawn absolutely, so the blend is measured against the Sun's frame
+        // (which doesn't move) — see mapBlend. Only the *drawn* copy is slid;
+        // every distance below still uses the true position.
+        if (tNow != null) {
+          mapBlend(x, y, t, tNow, SUN, _pblend);
+          pts.push(x + _pblend.x, y + _pblend.y);
+        } else pts.push(x, y);
+      }
       const tp = targetPos(target, t);
       const d = Math.hypot(x - tp.x, y - tp.y);
       if (d < best) { best = d; bestT = t; }
@@ -1322,7 +1396,7 @@
     // final pass, keeping the path for the map
     const shot = flyToward(best.st.x, best.st.y,
       best.st.vx + best.ux * best.dv, best.st.vy + best.uy * best.dv,
-      best.tBurn, target, span, true, res);
+      best.tBurn, target, span, true, res, t);
 
     return {
       ok: true, target, parent,

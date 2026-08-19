@@ -273,6 +273,11 @@
     if (v._dirty) v.rebuildGraph();
     v.updateMass();
     const A = aeroOf(v);
+    // Effects spawned from here down to the integrate block below are placed
+    // using this step's *starting* state, so they are born at `t`. (Set per
+    // vessel, not once for the fleet: the heating section at the bottom moves
+    // the clock on, and the next vessel through here must not inherit that.)
+    if (S.fx) S.fx.clock = t;
 
     let Fx = 0, Fy = 0, Tq = 0;
     const m = v.mass;
@@ -495,6 +500,13 @@
     v.atmoF = atmoF;
 
     /* ── friction and solar heating (either can burn parts clean off) ── */
+    // This runs *after* the integrate block, so its embers and burn-off puffs
+    // are placed at the end-of-step position and are born at the end-of-step
+    // clock. Stamping them with `t` like everything above meant the renderer
+    // then advanced them by one extra sub-step — and since a particle carries
+    // its planet's orbital velocity, over Earth that put the heat trail a
+    // clean 17 m (2 km/s × 1/120 s) up-track of the hull it came off.
+    if (S.fx) S.fx.clock = t + dt;
     applyHeat(v, rho, avx, avy, dt, t);
   }
 
