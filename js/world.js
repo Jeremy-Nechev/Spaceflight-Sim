@@ -158,6 +158,10 @@
 
   W.bodies.forEach(b => {
     b.seaLevel = b.radius;
+    // the furthest the ground can ever get from the nominal radius, so a
+    // collision test's cheap first cut can't skip a mountain
+    b.relief = 1 + b.cont.reduce((a, c) => a + Math.abs(c[0]), 0)
+      + b.detail.reduce((a, c) => a + Math.abs(c[0]), 0);
     if (b.scenery) b.chunkAng = b.scenery.chunkM / b.radius;
     if (b.clouds) b.cloudAng = b.clouds.chunkM / b.radius;
     b._sc = new Map();
@@ -659,7 +663,13 @@
     let b = W.soiBody(x, y, t);
     while (b.parent) {
       const el = W.elements(b, x, y, vx, vy, t);
-      if (el.e < 1 && isFinite(el.a) && el.a > 0) break;   // bound here — this is the frame
+      // Bound *and* fitting inside the sphere. Testing the sign of the energy
+      // alone puts a slow arrival on a knife edge: a craft coasting in to Mars
+      // has about 180 m/s of excess speed and escape at the boundary is 137,
+      // so the Sun's pull flips the sign of its Mars-relative energy from one
+      // refresh to the next. An apoapsis reaching back out past the boundary
+      // is not an orbit round this world whatever the sign says.
+      if (el.e < 1 && isFinite(el.a) && el.a > 0 && el.ap < b.soi * 0.9) break;
       b = b.parent;
     }
     return b;
@@ -667,64 +677,128 @@
   W.frameBody = frameBody;
 
   /**
-   * How far to slide one path point sideways, for *display only*.
+   * The radius a falling craft actually comes to rest at, at angle `th`.
    *
-   * A path is a string of positions at different times, but the map draws the
-   * worlds where they are right now. Plotted in raw inertial coordinates a
-   * path is correct in space and misleading on screen: the departure leg sits
-   * where Earth *was* when the craft left, so it appears to cut straight
-   * through a planet that has since coasted clear of it, and the arrival leg
-   * sits where Mars *isn't yet*, so a transfer that arrives dead on looks like
-   * it misses by millions of kilometres. Both readings are alarming and both
-   * are wrong.
-   *
-   * So each point is slid toward wherever its local world is actually drawn:
-   * fully co-moving with that world deep inside its sphere of influence,
-   * fading back to the path's own frame by the boundary — which is exactly
-   * where that world stops being the thing you are flying around. The line
-   * bends gently in between, and in exchange both of its ends land on the
-   * worlds they really leave from and arrive at.
-   *
-   * Returns the *extra* offset on top of the caller's own frame shift, so a
-   * point already inside the frame body's sphere (an ordinary orbit) gets
-   * zero and is drawn exactly as it always was.
+   * Not the same thing as the terrain: over anything below sea level the craft
+   * splashes down on the water, which is where the physics stops it too.
+   * Predicting against the raw seabed put the impact marker as much as three
+   * and a half kilometres under the surface it would really hit.
    */
-  const _pblend = { x: 0, y: 0 };
+  function impactR(b, th) {
+    const g = terrain(b, th);
+    return (b.sea && g < b.seaLevel) ? b.seaLevel : g;
+  }
+  W.impactR = impactR;
 
-  function mapBlend(x, y, t, tNow, ref, out) {
-    out.x = 0; out.y = 0;
-    const b = W.soiBody(x, y, t);
-    if (b === ref || !b.soi) return out;
-    const bp = W.bodyPos(b, t);
-    const bx = bp.x, by = bp.y;               // copy: bodyPos hands back its own cache
-    const d = Math.hypot(x - bx, y - by);
-    // all of it well inside the sphere, none of it by the boundary
-    let w = U.clamp((1 - d / b.soi) / 0.65, 0, 1);
-    if (w <= 0) return out;
+  /**
+   * Where inside one integrator step the path crosses the ground.
+   *
+   * Bisects on the step's own position polynomial rather than re-integrating,
+   * which is exact to the same order the step itself is and costs a couple of
+   * dozen multiplies. `lo` starts above ground because the previous sample was
+   * tested and passed; if the path began underground it simply returns where
+   * it began.
+   */
+  function groundCross(b, x0, y0, vx0, vy0, ax0, ay0, t0, dt) {
+    const at = (h) => ({
+      x: x0 + vx0 * h + 0.5 * ax0 * h * h,
+      y: y0 + vy0 * h + 0.5 * ay0 * h * h,
+      t: t0 + h
+    });
+    let lo = 0, hi = dt;
+    for (let k = 0; k < 20; k++) {
+      const mid = (lo + hi) / 2;
+      const q = at(mid);
+      const bp = W.bodyPos(b, q.t);
+      const dx = q.x - bp.x, dy = q.y - bp.y;
+      if (Math.hypot(dx, dy) < impactR(b, Math.atan2(dy, dx))) hi = mid; else lo = mid;
+    }
+    return at(hi);
+  }
 
-    const rp = W.bodyPos(ref, t);
-    const rpx = rp.x, rpy = rp.y;
-    const rn = W.bodyPos(ref, tNow);
-    const baseX = rn.x - rpx, baseY = rn.y - rpy;
-    const bn = W.bodyPos(b, tNow);
-    const offX = (bn.x - bx) - baseX, offY = (bn.y - by) - baseY;
+  /**
+   * Split a sampled path into the patches it flies through, and put each into
+   * its own world's co-moving frame.
+   *
+   * A path is a string of positions at different *times*, but the map draws
+   * the worlds where they are right *now*, so every point has to be told which
+   * world it belongs to before it can be drawn anywhere sensible. Held in one
+   * frame for its whole length a path is correct in space and misleading on
+   * screen: the departure sits where Earth was at launch and so appears to cut
+   * straight through a planet that has long since coasted clear of it, and the
+   * arrival sits where Mars isn't yet, so a transfer that lands dead on looks
+   * like it misses by millions of kilometres.
+   *
+   * So each run of samples inside one sphere of influence becomes a leg, held
+   * relative to that world's position at each sample's own instant, and the
+   * renderer anchors the whole leg on where that world is now. Both ends then
+   * land where the map draws them, and — the part that matters most — no point
+   * is ever drawn relative to a world it isn't near, which is what used to
+   * scribble the line into knots on the way in to Mars.
+   *
+   * The seams between legs are visible, because they are real: two samples an
+   * instant apart, drawn about two worlds that have moved differently since.
+   * The alternative is to slide points so the frames blend into each other,
+   * and the trouble with that is the slide has to be spent over however many
+   * samples happen to straddle the boundary. Out at Mars there are three or
+   * four, each a couple of hundred kilometres apart, carrying a slide of a
+   * couple of thousand — which draws as a hard kink an order of magnitude
+   * bigger than the path's own stride. Better an honest break at the hand-off.
+   */
+  const LEG_MIN = 5;
+  const LEG_MAX = 4;
 
-    // Only ever a *small* correction. Slide a point by more than the sphere it
-    // sits in and "where that world is now" has stopped meaning anything: a
-    // target a week's flight away has moved a good fraction of its own orbit,
-    // and dragging the arrival onto where it is drawn today would bend the
-    // path by more than the length of the trip. Worse, the slide would have to
-    // be spent across the two or three samples that cross the sphere, which
-    // shows up as a hard kink in the line. So it fades out as the offset grows
-    // past the sphere, which leaves the near-departure fix (where the shift is
-    // a few thousand kilometres) and quietly declines the rest.
-    const off = Math.hypot(offX, offY);
-    if (off > b.soi) return out;
-    w *= 1 - off / b.soi;
+  function legsOf(abs, ts, own) {
+    const n = ts.length;
+    if (!n) return [];
 
-    out.x = w * offX;
-    out.y = w * offY;
-    return out;
+    // runs of consecutive samples under the same world
+    const runs = [];
+    for (let i = 0; i < n; i++) {
+      const b = own[i];
+      const last = runs[runs.length - 1];
+      if (last && last.b === b) last.z = i + 1;
+      else runs.push({ b, a: i, z: i + 1 });
+    }
+
+    // A path that clips the corner of a sphere for three samples is one line,
+    // not three: fold any run too short to be worth a seam into its neighbour,
+    // preferring the one behind it so the leg holding "now" keeps its frame.
+    for (let i = 0; i < runs.length && runs.length > 1; i++) {
+      const r = runs[i];
+      if (r.z - r.a >= LEG_MIN) continue;
+      if (i > 0) { runs[i - 1].z = r.z; runs.splice(i, 1); i -= 2; }
+      else { runs[1].a = r.a; runs.splice(0, 1); i -= 1; }
+    }
+    for (let i = 1; i < runs.length; i++) {
+      if (runs[i].b !== runs[i - 1].b) continue;
+      runs[i - 1].z = runs[i].z; runs.splice(i, 1); i--;
+    }
+
+    // Stop after a few hand-offs. Every one of them is a real break in the
+    // drawn line, and a path that keeps clipping the corner of a moon's sphere
+    // can rack up a dozen — at which point the map is back to looking like
+    // spaghetti, for the opposite reason. Past the third hand-off the
+    // prediction is largely hypothetical anyway: it assumes the player flies
+    // several encounters without touching the throttle. The closest-approach
+    // figures the panel reports come off the full integration, not from here,
+    // so trimming the drawing costs nothing but line.
+    if (runs.length > LEG_MAX) runs.length = LEG_MAX;
+
+    const legs = [];
+    for (let k = 0; k < runs.length; k++) {
+      const r = runs[k];
+      // carry the boundary sample into the next leg as well, so each leg runs
+      // all the way to the hand-off rather than stopping one sample short
+      const z = k + 1 < runs.length ? Math.min(n, r.z + 1) : r.z;
+      const pts = [];
+      for (let i = r.a; i < z; i++) {
+        const bp = W.bodyPos(r.b, ts[i]);
+        pts.push(abs[i * 2] - bp.x, abs[i * 2 + 1] - bp.y);
+      }
+      legs.push({ ref: r.b, pts });
+    }
+    return legs;
   }
 
   /**
@@ -777,21 +851,21 @@
       const p = at(E);
       // the ground gets in the way — stop there, and pin down where within a
       // few hundred metres rather than to the nearest sample
-      const gr = terrain(ref, p.th);
+      const gr = impactR(ref, p.th);
       if (p.r < gr) {
         if (prev) {
           let lo = prev.E, hi = E;
           for (let k = 0; k < 18; k++) {
             const mid = (lo + hi) / 2;
             const q = at(mid);
-            if (q.r < terrain(ref, q.th)) hi = mid; else lo = mid;
+            if (q.r < impactR(ref, q.th)) hi = mid; else lo = mid;
           }
           const q = at(hi);
           pts.push(q.x, q.y);
           span = q.t - t0;
-          hit = { body: ref, t: span, x: q.x, y: q.y };
+          hit = { body: ref, ref, t: span, x: q.x, y: q.y };
         } else {
-          hit = { body: ref, t: 0, x: p.x, y: p.y };
+          hit = { body: ref, ref, t: 0, x: p.x, y: p.y };
           span = 0;
         }
         break;
@@ -821,7 +895,9 @@
       }
     }
 
-    return { pts, ref, refNow: bp0, hit, closed: !hit, escape: false, span, closest, conic: true };
+    // one body, one sphere, one leg — a conic that reached out of this sphere
+    // was handed to the integrator at the top of the function
+    return { legs: [{ ref, pts }], pts, ref, hit, closed: !hit, escape: false, span, closest, conic: true };
   }
 
   /**
@@ -836,13 +912,15 @@
     const maxSteps = opts.maxSteps || 2400;
     const dtCap = opts.dtCap || 1200;
     const ref = frameBody(x, y, vx, vy, t0);
-    const refNow = W.bodyPos(ref, t0);
     {
       const elRef = W.elements(ref, x, y, vx, vy, t0);
       const c = conicPath(ref, elRef, x, y, vx, vy, t0, opts);
       if (c) return c;
     }
-    const pts = [];
+    // samples are collected in plain inertial coordinates and only sorted into
+    // per-world frames at the end, by legsOf — a point's frame depends on
+    // where it turns out to be, which isn't known until it has been stepped to
+    const abs = [], ts = [], own = [];
     const g = { x: 0, y: 0 };
     let t = t0, hit = null, escape = false;
     // optional { posAt(t) } — how close the path we are actually on comes to
@@ -861,6 +939,11 @@
 
     W.gravity(x, y, t, g);
     let ax = g.x, ay = g.y;
+
+    // start where the craft actually is. Recording only post-step positions
+    // left the line beginning a stride ahead of the ship it belongs to, which
+    // on an escape is sixteen kilometres of daylight between the two.
+    abs.push(x, y); ts.push(t); own.push(W.soiBody(x, y, t));
 
     for (let i = 0; i < maxSteps; i++) {
       // Step size from the nearest thing in the sky, not merely from whichever
@@ -885,7 +968,9 @@
       }
       if (dt < 0.4) dt = 0.4;
 
-      // velocity Verlet
+      // velocity Verlet, keeping the state it started from — the ground search
+      // below re-walks this same step at finer resolution
+      const ox = x, oy = y, ovx = vx, ovy = vy, oax = ax, oay = ay, ot = t;
       const nx = x + vx * dt + 0.5 * ax * dt * dt;
       const ny = y + vy * dt + 0.5 * ay * dt * dt;
       t += dt;
@@ -896,10 +981,32 @@
       travelled += lastStep;
       x = nx; y = ny; ax = g.x; ay = g.y;
 
-      const rp = W.bodyPos(ref, t);
-      const rpx = rp.x, rpy = rp.y;        // copy: mapBlend reuses the same cache
-      mapBlend(x, y, t, t0, ref, _pblend);
-      pts.push(x - rpx + _pblend.x, y - rpy + _pblend.y);
+      // Impact, and which world this sample belongs to — both out of the same
+      // sweep, because one pass over every body's position pays for both.
+      // Innermost claim wins the sample, so the smallest sphere containing it
+      // keeps it, which is the rule W.soiBody uses.
+      let ownB = SUN, ownSoi = Infinity;
+      for (let k = 0; k < W.bodies.length; k++) {
+        const cb = W.bodies[k], cp = W.bodyPos(cb, t);
+        const cdx = x - cp.x, cdy = y - cp.y;
+        const cr = Math.hypot(cdx, cdy);
+        if (cb.soi && cr < cb.soi && cb.soi < ownSoi) { ownB = cb; ownSoi = cb.soi; }
+        if (cr < cb.radius + cb.relief && cr < impactR(cb, Math.atan2(cdy, cdx))) {
+          // Pin the crossing down instead of reporting the first sample that
+          // happens to be underground. Out here a step is a few seconds long,
+          // which at descent speed buries the marker a couple of hundred
+          // metres inside the hillside it was meant to be sitting on. The
+          // conic path has always bisected for this; the integrator never did.
+          const q = groundCross(cb, ox, oy, ovx, ovy, oax, oay, ot, dt);
+          x = q.x; y = q.y; t = q.t;
+          const cq = W.bodyPos(cb, t);
+          hit = { body: cb, ref: cb, t: t - t0, x: x - cq.x, y: y - cq.y };
+          ownB = cb;                      // the ground it stops on, whatever else claims it
+          break;
+        }
+      }
+
+      abs.push(x, y); ts.push(t); own.push(ownB);
 
       if (watch) {
         const wp = watch.posAt(t);
@@ -907,22 +1014,6 @@
         if (wd < closest.d) { closest.d = wd; closest.t = t; }
       }
 
-      // impact?
-      for (let k = 0; k < W.bodies.length; k++) {
-        const cb = W.bodies[k], cp = W.bodyPos(cb, t);
-        const cdx = x - cp.x, cdy = y - cp.y;
-        const cr = Math.hypot(cdx, cdy);
-        if (cr < cb.radius + 4000 && cr < terrain(cb, Math.atan2(cdy, cdx))) {
-          // in the path's own frame, and slid the same way the line was, so
-          // the marker stays on the end of the line rather than sitting
-          // wherever the body it hit happens to be right now
-          const hp = W.bodyPos(ref, t);
-          const hpx = hp.x, hpy = hp.y;
-          mapBlend(x, y, t, t0, ref, _pblend);
-          hit = { body: cb, t: t - t0, x: x - hpx + _pblend.x, y: y - hpy + _pblend.y };
-          break;
-        }
-      }
       if (hit) break;
 
       // one lap is enough
@@ -933,7 +1024,13 @@
       if (Math.hypot(x, y) > W.systemR) { escape = true; break; }
     }
 
-    return { pts, ref, refNow, hit, closed, escape, span: t - t0, closest };
+    const legs = legsOf(abs, ts, own);
+    // `pts`/`ref` describe the leg holding "now" — the one an older caller
+    // that hasn't learned about legs would have wanted anyway
+    return {
+      legs, pts: legs.length ? legs[0].pts : [], ref: legs.length ? legs[0].ref : ref,
+      hit, closed, escape, span: t - t0, closest
+    };
   };
 
   /* ═══════════════════ transfer planning ═══════════════════ */
@@ -1031,9 +1128,19 @@
    * a crossing between planets covers a hundred times the distance and has to
    * stride out or it runs out of step budget somewhere short of the target —
    * which reads as "no route found" when the route was perfectly good.
+   *
+   * The path it collects is a single run of absolute positions, deliberately
+   * *not* split into per-world legs the way a live path is (see legsOf). A
+   * plotted transfer is a future event: its burn can be a week out, by which
+   * time Earth has moved further than the whole system is wide, so there is no
+   * instant at which its departure, its cruise and its arrival are all where
+   * the map is drawing those worlds. Split, it comes out as three or four arcs
+   * scattered across the screen with nothing joining them. Whole, it is one
+   * honest line through absolute space, and the renderer explains its two ends
+   * by ghosting in the worlds where they will be when it reaches them.
    */
-  function flyToward(x, y, vx, vy, t0, target, span, collect, res, tNow) {
-    let t = t0, best = Infinity, bestT = t0, hit = false;
+  function flyToward(x, y, vx, vy, t0, target, span, collect, res) {
+    let t = t0, best = Infinity, bestT = t0, bestI = 0, hit = false;
     // a hop to the Moon and a crossing to another planet differ by a hundredfold
     // in both distance and duration, so the stride scales with the span asked for
     const div = (res && res.div) || (span > 2e5 ? 90 : 190);
@@ -1041,7 +1148,7 @@
     const g = { x: 0, y: 0 };
     W.gravity(x, y, t, g);
     let ax = g.x, ay = g.y;
-    const pts = collect ? [] : null;
+    const abs = collect ? [] : null;
     for (let i = 0; i < 2600 && t < t0 + span; i++) {
       const b = W.soiBody(x, y, t), bp = W.bodyPos(b, t);
       const rr = Math.hypot(x - bp.x, y - bp.y);
@@ -1052,24 +1159,24 @@
       W.gravity(nx, ny, t, g);
       vx += 0.5 * (ax + g.x) * dt; vy += 0.5 * (ay + g.y) * dt;
       x = nx; y = ny; ax = g.x; ay = g.y;
-      if (collect) {
-        // Drawn absolutely, so the blend is measured against the Sun's frame
-        // (which doesn't move) — see mapBlend. Only the *drawn* copy is slid;
-        // every distance below still uses the true position.
-        if (tNow != null) {
-          mapBlend(x, y, t, tNow, SUN, _pblend);
-          pts.push(x + _pblend.x, y + _pblend.y);
-        } else pts.push(x, y);
-      }
+      if (collect) abs.push(x, y);
       const tp = targetPos(target, t);
       const d = Math.hypot(x - tp.x, y - tp.y);
-      if (d < best) { best = d; bestT = t; }
+      if (d < best) { best = d; bestT = t; bestI = collect ? abs.length / 2 - 1 : 0; }
       if (d < target.radius) { hit = true; break; }
       // ran into whatever we were nearest on the way — no point flying on
       const hb = W.soiBody(x, y, t), hp = W.bodyPos(hb, t);
       if (Math.hypot(x - hp.x, y - hp.y) < hb.radius) break;
     }
-    return { miss: best, tArrive: bestT, pts, hit };
+    // The line stops at the arrival: left to run it flies on for the rest of
+    // the search span, most of another orbit past the encounter, on a course
+    // that assumes a capture burn nobody has planned yet. That stretched the
+    // plan across three times the screen it needed and buried the part of it
+    // the player was actually reading.
+    return {
+      miss: best, tArrive: bestT, hit,
+      pts: collect ? abs.slice(0, (bestI + 1) * 2) : null
+    };
   }
 
   /**
@@ -1396,7 +1503,7 @@
     // final pass, keeping the path for the map
     const shot = flyToward(best.st.x, best.st.y,
       best.st.vx + best.ux * best.dv, best.st.vy + best.uy * best.dv,
-      best.tBurn, target, span, true, res, t);
+      best.tBurn, target, span, true, res);
 
     return {
       ok: true, target, parent,
@@ -1409,6 +1516,7 @@
       wantAlt: wantMiss - target.radius,
       intercept: shot.miss < target.soi,
       burnX: best.st.x, burnY: best.st.y,
+      tArrive: best.tArrive,
       pts: shot.pts
     };
   };
@@ -1489,6 +1597,7 @@
       nowPeriapsis: now.miss - target.radius,
       intercept: best.miss < soi,
       burnX: v.x, burnY: v.y,
+      tArrive: best.tArrive,
       pts: null
     };
   };

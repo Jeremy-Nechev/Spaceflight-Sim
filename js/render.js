@@ -604,8 +604,8 @@
   }
 
   /** surface-band colour at a given angle, seen from orbit */
-  function matAt(b, th, dth) {
-    const r = W.terrain(b, th, dth);
+  function matAt(b, th, dth, r) {
+    if (r == null) r = W.terrain(b, th, dth);
     if (!b.sea) return r > b.seaLevel + 900 ? b.col.rock : b.col.land;
     if (r < b.seaLevel) return r < b.seaLevel - 1400 ? b.col.waterDeep : b.col.water;
     if (b.biomes) {
@@ -621,6 +621,71 @@
     forest: '#375f2c', mountain: '#8a8175', city: '#7c7b78'
   };
   const SNOWCAP = '#e8eef5';
+
+  /**
+   * The hills, once the map is zoomed in far enough for them to matter.
+   *
+   * From a distance a world is a disc at sea level, which is both cheap and
+   * what it looks like. Close in it is a lie with a number attached: an impact
+   * marker is placed on the real ground, so on a map that draws none the X
+   * floats above a smooth blue circle by exactly however high the hillside it
+   * hit happens to be — a hundred metres at Kestrel Bay, two kilometres in the
+   * mountains. Below sea level nothing is drawn, because there the disc's own
+   * edge already is the surface a craft would splash into.
+   */
+  function drawRelief(ctx, b, rx, ry, zoom, viewR) {
+    if (!b.relief || b.relief * zoom < 1.2) return;
+    const Rr = b.radius, sea = b.seaLevel;
+    // nothing of it on screen — and the map's body loop doesn't cull, so
+    // without this a zoom in on Earth still walks Mars' coastline every frame
+    if (Math.hypot(rx, ry) - Rr - b.relief > viewR) return;
+    const halfAng = Math.min(Math.PI, (viewR + Rr * 0.02) / Rr + 0.02);
+    const thC = Math.atan2(-ry, -rx);          // the arc facing the camera
+    const n = Math.round(U.clamp((halfAng * 2 * Rr * zoom) / 2.5, 48, 1200));
+    const dth = (halfAng * 2) / n;
+    const th0 = thC - halfAng;
+
+    // Sample the ground once and keep it — the fill below walks each stretch
+    // twice, and terrain() is much the most expensive thing here.
+    const th = new Float64Array(n + 1);
+    const gr = new Float64Array(n + 1);
+    const cx = new Float64Array(n + 1);
+    const cy = new Float64Array(n + 1);
+    let anyLand = false;
+    for (let i = 0; i <= n; i++) {
+      const a = th0 + dth * i;
+      const r = W.terrain(b, a, dth);
+      th[i] = a; gr[i] = r;
+      cx[i] = Math.cos(a); cy[i] = Math.sin(a);
+      if (r > sea) anyLand = true;
+    }
+    if (!anyLand) return;                    // all coast to coast water here
+
+    // one run per stretch of like-coloured country, so a shoreline or a
+    // snowline reads the same here as it does in the band below it
+    let i = 0;
+    while (i < n) {
+      const mat = matAt(b, th[i] + dth * 0.5, dth, (gr[i] + gr[i + 1]) * 0.5);
+      let j = i + 1;
+      while (j < n && matAt(b, th[j] + dth * 0.5, dth, (gr[j] + gr[j + 1]) * 0.5) === mat) j++;
+      let land = false;
+      for (let k = i; k <= j && !land; k++) if (gr[k] > sea) land = true;
+      if (land) {
+        // outward along the ground, back along the waterline
+        ctx.beginPath();
+        for (let k = i; k <= j; k++) {
+          const r = gr[k] > sea ? gr[k] : sea;
+          if (k === i) ctx.moveTo(rx + cx[k] * r, ry + cy[k] * r);
+          else ctx.lineTo(rx + cx[k] * r, ry + cy[k] * r);
+        }
+        for (let k = j; k >= i; k--) ctx.lineTo(rx + cx[k] * sea, ry + cy[k] * sea);
+        ctx.closePath();
+        ctx.fillStyle = mat;
+        ctx.fill();
+      }
+      i = j;
+    }
+  }
 
   function drawCraters(ctx, b, rx, ry, Rr) {
     const rnd = U.rng(4242);
@@ -1687,6 +1752,88 @@
 
   /* ═══════════════════ map view ═══════════════════ */
 
+  /**
+   * Stroke a predicted path.
+   *
+   * A path arrives split into legs, each held in the frame of the world whose
+   * sphere of influence it flies through (see W.predict), so each one is
+   * anchored on where that world is *now* — which is the only way a line to
+   * Mars can both leave the Earth it is drawn beside and reach the Mars it is
+   * drawn beside.
+   *
+   * Where two legs meet there is a real break: the same instant, drawn about
+   * two worlds that have moved differently since. A faint dotted connector
+   * spans it while the break is of a size that belongs to the hand-off itself
+   * — a few spheres of influence, which is what a couple of hours of a
+   * planet's own travel comes to — so the eye reads one path handing over
+   * rather than two paths. Further out than that the break is measured in days
+   * of orbital motion and there is nothing useful to draw between them.
+   */
+  function strokeLegs(ctx, legs, t, z, col, width, dash, viewR) {
+    if (!legs || !legs.length) return;
+    let prevX = 0, prevY = 0, prevSoi = 0, havePrev = false;
+    for (const leg of legs) {
+      const n = leg.pts.length;
+      if (n < 4) { havePrev = false; continue; }
+      const bp = W.bodyPos(leg.ref, t);
+      const ox = bp.x - cam.x, oy = bp.y - cam.y;    // copy: bodyPos reuses its cache
+      const soi = leg.ref.soi || 0;
+
+      if (havePrev) {
+        const gx = leg.pts[0] + ox, gy = leg.pts[1] + oy;
+        const lim = 6 * Math.max(soi, prevSoi) || viewR * 0.3;
+        if (Math.hypot(gx - prevX, gy - prevY) < lim) {
+          ctx.save();
+          ctx.globalAlpha = 0.3;
+          ctx.strokeStyle = col;
+          ctx.lineWidth = width / z;
+          ctx.setLineDash([2 / z, 5 / z]);
+          ctx.beginPath();
+          ctx.moveTo(prevX, prevY); ctx.lineTo(gx, gy);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+
+      ctx.strokeStyle = col;
+      ctx.lineWidth = width / z;
+      if (dash) ctx.setLineDash([dash[0] / z, dash[1] / z]);
+      ctx.beginPath();
+      for (let i = 0; i < n; i += 2) {
+        const x = leg.pts[i] + ox, y = leg.pts[i + 1] + oy;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      if (dash) ctx.setLineDash([]);
+
+      prevX = leg.pts[n - 2] + ox; prevY = leg.pts[n - 1] + oy;
+      prevSoi = soi; havePrev = true;
+    }
+  }
+
+  /**
+   * A world sketched in where it will be at some future instant, so a line
+   * drawn to that instant has something to arrive at. Skipped when the world
+   * has barely moved by then and the ghost would just be a second ring drawn
+   * over the planet itself.
+   */
+  function ghostWorld(ctx, b, tThen, tNow, z) {
+    if (!b || b.star) return;
+    const now = W.bodyPos(b, tNow);
+    const nx = now.x, ny = now.y;                  // copy: bodyPos reuses its cache
+    const then = W.bodyPos(b, tThen);
+    const r = Math.max(b.radius, 5 / z);
+    if (Math.hypot(then.x - nx, then.y - ny) < r * 2.5) return;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(then.x - cam.x, then.y - cam.y, r, 0, U.TAU);
+    ctx.strokeStyle = 'rgba(255,190,90,.5)';
+    ctx.lineWidth = 1.2 / z;
+    ctx.setLineDash([3 / z, 4 / z]);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function drawMap(ctx, G, cw, ch, dpr) {
     const t = G.t, viewR = R.viewR(cw, ch);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1730,6 +1877,7 @@
         ctx.fill();
       } else {
         drawOrbital(ctx, b, rx, ry, z, 1);
+        drawRelief(ctx, b, rx, ry, z, viewR);
       }
       if (b.orbit && b.orbit.a * z > 40) {
         ctx.save();
@@ -1754,19 +1902,13 @@
 
     // predicted path
     const pr = G.path;
-    if (pr && pr.pts.length > 3) {
-      const rp = W.bodyPos(pr.ref, t);
-      ctx.beginPath();
-      for (let i = 0; i < pr.pts.length; i += 2) {
-        const x = pr.pts[i] + rp.x - cam.x, y = pr.pts[i + 1] + rp.y - cam.y;
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      }
-      ctx.strokeStyle = pr.hit ? 'rgba(255,120,110,.9)' : 'rgba(120,220,160,.9)';
-      ctx.lineWidth = 1.6 / z;
-      ctx.stroke();
+    if (pr) {
+      strokeLegs(ctx, pr.legs, t,
+        z, pr.hit ? 'rgba(255,120,110,.9)' : 'rgba(120,220,160,.9)', 1.6, null, viewR);
       if (pr.hit) {
-        // the impact point is stored in the path's own frame (see W.predict)
-        markX(ctx, pr.hit.x + rp.x - cam.x, pr.hit.y + rp.y - cam.y, 7 / z, '#ff6b60');
+        // held against the world it hit, so the X stays on that spot of ground
+        const hp = W.bodyPos(pr.hit.ref, t);
+        markX(ctx, pr.hit.x + hp.x - cam.x, pr.hit.y + hp.y - cam.y, 7 / z, '#ff6b60');
       }
     }
 
@@ -1783,6 +1925,17 @@
       ctx.setLineDash([9 / z, 6 / z]);
       ctx.stroke();
       ctx.setLineDash([]);
+      // Where the worlds will actually be when this line gets to them. A
+      // plotted transfer is drawn in absolute space, so both of its ends sit
+      // well away from the planets as the map draws them today — the departure
+      // where Earth will be at the burn, the arrival where Mars will be days
+      // later. Unexplained that reads as a plan that misses by half the solar
+      // system; with the two worlds ghosted in at the times that matter it
+      // reads as what it is.
+      ghostWorld(ctx, W.soiBody(plan.burnX, plan.burnY, plan.tBurn), plan.tBurn, t, z);
+      if (plan.target && !plan.target.isVessel && plan.tArrive) {
+        ghostWorld(ctx, plan.target, plan.tArrive, t, z);
+      }
       // burn node
       const bx = plan.burnX - cam.x, by = plan.burnY - cam.y;
       const s = 6 / z;
@@ -1821,16 +1974,10 @@
         if (ves === focus || ves.dead) continue;
         const isMission = !!ves.mission;
         const pr = ves.path;
-        if (pr && pr.pts && pr.pts.length > 3) {
-          const rp = W.bodyPos(pr.ref, t);
-          ctx.beginPath();
-          for (let i = 0; i < pr.pts.length; i += 2) {
-            const x = pr.pts[i] + rp.x - cam.x, y = pr.pts[i + 1] + rp.y - cam.y;
-            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-          }
-          ctx.strokeStyle = isMission ? 'rgba(120,180,255,.5)' : 'rgba(150,150,150,.26)';
-          ctx.lineWidth = (isMission ? 1.2 : 0.8) / z;
-          ctx.stroke();
+        if (pr) {
+          strokeLegs(ctx, pr.legs, t, z,
+            isMission ? 'rgba(120,180,255,.5)' : 'rgba(150,150,150,.26)',
+            isMission ? 1.2 : 0.8, null, viewR);
         }
         const s = (isMission ? 5.5 : 4.5) / z;
         ctx.save();
